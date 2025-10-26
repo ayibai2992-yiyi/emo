@@ -4,27 +4,38 @@
 1. 缺少对不同模型之间的对比
 2.compute_confusion_matrix 方法未在main中测试
 3.EmotionMetrics.compute_metrics 中标签顺序不匹配
+
+key main methods:
+1. EmotionMetrics: 情绪分类的基础指标(准确率、精确率、召回率、F1等)
+2. PersonalizationMetrics: 个性化模型的评估指标
+3. FewShotMetrics: 少样本学习的性能评估
+4. AlertMetrics: 预警系统的评估指标和延迟统计
 """
 
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from sklearn.metrics import (
     accuracy_score,
-    precision_recall_fscore_support,
+    precision_recall_fscore_support,#计算精确率、召回率、F1分数
     confusion_matrix,
     classification_report
 )
 
 
 class EmotionMetrics:
-    """情绪分类评估指标"""
+    """
+    情绪分类评估指标
+    1. 评估指标：准确率、精确率、召回率、F1分数
+    2. 混淆矩阵
+    3. 分类报告
+    """
     
     def __init__(self, emotion_labels: Optional[List[str]] = None):
         """
         初始化
         
         Args:
-            emotion_labels: 情绪标签列表
+            emotion_labels: 情绪标签列表 映射表 or 默认
         """
         if emotion_labels is None:
             emotion_labels = ['中性', '高兴', '惊讶', '悲伤', '愤怒', '恐惧', '厌恶', '绝望']
@@ -45,9 +56,27 @@ class EmotionMetrics:
             y_true: 真实标签
             y_pred: 预测标签
             average: 平均方式 ('macro', 'micro', 'weighted')
+            macro: 计算所有类别的指标的未加权平均值
+            micro: 计算所有类级别的指标的加权平均值
+            weighted: 计算所有类级别的指标的加权平均值，权重为每个类的支持度
             
         Returns:
             指标字典
+            accuracy: 准确率
+            precision_macro: 宏平均精确率
+            recall_macro: 宏平均召回率
+            f1_macro: 宏平均F1分数
+            precision_<label>: 每个类别的精确率
+            recall_<label>: 每个类别的召回率
+            f1_<label>: 每个类别的F1分数
+            support_<label>: 每个类别的支持度
+        Note:
+            精确率(Precision): 在所有被预测为正类的样本中，实际为正类的比例。
+            召回率(Recall): 在所有实际为正类的样本中，被正确预测为正类的比例。
+            F1分数(F1 Score): 精确率和召回率的调和平均数，综合考虑了两者的表现，越高说明效果越好。
+            准确率(Accuracy): 所有预测中，正确预测的比例。
+            混淆矩阵: 显示分类结果与真实结果的对比，矩阵的对角线上的元素表示预测正确的数量，
+                      非对角线上的元素表示预测错误的数量。
         """
         # 准确率
         accuracy = accuracy_score(y_true, y_pred)
@@ -64,7 +93,7 @@ class EmotionMetrics:
             f'f1_{average}': float(f1)
         }
         
-        # 每个类别的指标
+        # 每个类别的指标 返回的是每个类别的指标数组
         precision_per_class, recall_per_class, f1_per_class, support_per_class = \
             precision_recall_fscore_support(
                 y_true, y_pred, average=None, zero_division=0
@@ -72,6 +101,7 @@ class EmotionMetrics:
         
         for i, label in enumerate(self.emotion_labels):
             if i < len(precision_per_class):
+                # 每个情绪类别的四个指标
                 metrics[f'precision_{label}'] = float(precision_per_class[i])
                 metrics[f'recall_{label}'] = float(recall_per_class[i])
                 metrics[f'f1_{label}'] = float(f1_per_class[i])
@@ -93,6 +123,9 @@ class EmotionMetrics:
             
         Returns:
             混淆矩阵
+
+        Note:
+            混淆矩阵的行表示真实标签，列表示预测标签。
         """
         return confusion_matrix(y_true, y_pred)
     
@@ -109,33 +142,39 @@ class EmotionMetrics:
             y_pred: 预测标签
             
         Returns:
-            分类报告字符串
+            格式化字符串：
+            - 每个类别的准确率、精确率、召回率、F1分数
+            - 整体的准确率
+            - 宏平均和加权
+        Note:
+            分类报告是sklearn的标准格式
         """
         return classification_report(
             y_true, y_pred,
             target_names=self.emotion_labels,
-            zero_division=0
+            zero_division=0 # 忽略除零错误
         )
 
 
 class PersonalizationMetrics:
-    """个性化评估指标"""
+    """
+    个性化评估指标(与通用模型对比)
+    Asgs:
+        generic_f1: 通用模型F1分数
+        personalized_f1: 个性化模型F1分数
+    Returns:
+        个性化增益（personalization f1）:
+        - 正值表示个性化模型优于通用模型
+        - 负值表示个性化模型不如通用模型
+        - 0 表示两个模型效果相同
+
+    """
     
     @staticmethod
     def compute_personalization_gain(
         generic_f1: float,
         personalized_f1: float
     ) -> float:
-        """
-        计算个性化增益
-        
-        Args:
-            generic_f1: 通用模型F1分数
-            personalized_f1: 个性化模型F1分数
-            
-        Returns:
-            个性化增益
-        """
         return personalized_f1 - generic_f1
     
     @staticmethod
@@ -154,7 +193,7 @@ class PersonalizationMetrics:
             用户级别指标字典
         """
         user_metrics = {}
-        
+        # 遍历用户
         for user_id in y_true_by_user:
             if user_id not in y_pred_by_user:
                 continue
@@ -166,6 +205,7 @@ class PersonalizationMetrics:
                 continue
             
             accuracy = accuracy_score(y_true, y_pred)
+            #_忽略不需要的返回值
             _, _, f1, _ = precision_recall_fscore_support(
                 y_true, y_pred, average='macro', zero_division=0
             )
@@ -196,6 +236,10 @@ class FewShotMetrics:
             
         Returns:
             性能字典
+        Note:
+            绘制学习曲线，样本数的影响
+            improvement_rate: 学习效果
+            曲线平稳说明模型对样本数不敏感
         """
         performance = {}
         
@@ -226,8 +270,14 @@ class FewShotMetrics:
             
         Returns:
             样本效率（达到多少比例的性能用了多少比例的数据）
+            efficiency = (few_shot_f1 / full_shot_f1) / (few_shot_size / full_shot_size)
+            - 值>1: 表示样本利用效率很高,用少量数据就能达到较好效果
+            - 值=1: 表示性能提升与数据增加成正比
+            - 值<1: 表示需要大量数据才能提升性能
         """
+        #计算样本效率 少量样本性能
         performance_ratio = few_shot_f1 / full_shot_f1 if full_shot_f1 > 0 else 0
+        #计算样本效率 用了多少比率的数据
         data_ratio = few_shot_size / full_shot_size if full_shot_size > 0 else 0
         
         if data_ratio > 0:
@@ -237,7 +287,11 @@ class FewShotMetrics:
 
 
 class AlertMetrics:
-    """预警系统评估指标"""
+    """
+    预警系统评估指标
+    1. 预警指标：精确率、召回率、F1分数、特异性等
+    2. 延迟统计：平均延迟、中位数延迟  
+    """
     
     @staticmethod
     def compute_alert_metrics(
@@ -289,7 +343,6 @@ class AlertMetrics:
     ) -> Dict[str, float]:
         """
         计算延迟指标
-        
         Args:
             latencies: 延迟列表（毫秒）
             

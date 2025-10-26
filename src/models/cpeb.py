@@ -3,6 +3,11 @@ CPEB: Causal Personalized Emotion Baseline
 因果个性化情绪基线模型
 
 使用因果推断消除个体表达习惯的混淆偏差
+讲情绪分解为：
+1.用户基线表达习惯
+2.用户真实的情绪表示
+
+通过因果推断消除表达习惯影响，获得更准确的情绪识别
 """
 
 import torch
@@ -17,6 +22,8 @@ class BaselineEstimator(nn.Module):
     """
     用户情绪基线估计器
     使用变分推断学习用户的情绪表达基线分布
+    Returns:
+        基线均值和对数方差
     """
     
     def __init__(self, hidden_size: int = 768, num_emotions: int = 8):
@@ -33,7 +40,7 @@ class BaselineEstimator(nn.Module):
         
         # 用户嵌入
         self.user_embedding_size = 64
-        self.user_embeddings = nn.Embedding(10000, self.user_embedding_size)
+        self.user_embeddings = nn.Embedding(50000, self.user_embedding_size)
         
         # 基线均值和方差估计网络
         self.mean_net = nn.Sequential(
@@ -84,16 +91,16 @@ class BaselineEstimator(nn.Module):
     ) -> torch.Tensor:
         """
         从基线分布采样
-        
-        Args:
+        Returns:
             baseline_mean: 基线均值
             baseline_logvar: 基线对数方差
-            
-        Returns:
-            采样的基线
+        考虑到用户习惯的变化和防止过拟合
         """
+        #标准化
         std = torch.exp(0.5 * baseline_logvar)
+        #正态分布
         eps = torch.randn_like(std)
+        #重参数
         return baseline_mean + eps * std
 
 
@@ -101,8 +108,11 @@ class CausalInterventionModule(nn.Module):
     """
     因果干预模块
     使用前门调整消除混淆偏差
+    Args:
+    - 原始情绪表示
+    - 用户基线
+    情绪=真实情绪+表达习惯
     """
-    
     def __init__(self, num_emotions: int = 8, hidden_size: int = 256):
         """
         初始化因果干预模块
@@ -114,7 +124,7 @@ class CausalInterventionModule(nn.Module):
         super().__init__()
         self.num_emotions = num_emotions
         
-        # 表达习惯编码器
+        # 表达习惯编码器 用户基数向量->表达习惯特征向量
         self.habit_encoder = nn.Sequential(
             nn.Linear(num_emotions, hidden_size),
             nn.ReLU(),
@@ -138,7 +148,7 @@ class CausalInterventionModule(nn.Module):
     ) -> torch.Tensor:
         """
         前向传播 - 因果干预
-        
+        原始情绪 → 识别习惯偏差 → 移除偏差 → 真实情绪
         Args:
             emotion_raw: 原始情绪表示 [batch_size, num_emotions]
             baseline: 用户基线 [batch_size, num_emotions]
@@ -163,6 +173,11 @@ class CPEBModel(nn.Module):
     """
     完整的CPEB模型
     因果个性化情绪基线模型
+    输入文本 → BERT编码 → 原始情绪分类 → 用户基线估计 → 因果干预 → 去偏情绪输出
+
+    1. 情绪分类损失:预测正确的情绪类别
+    2. 基线正则化损失:学习合理的用户基线
+    3. 因果干预效果:去偏后的结果应该更准确
     """
     
     def __init__(
@@ -251,7 +266,10 @@ class CPEBModel(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """
         前向传播
-        
+        1. BERT编码文本 → 获得文本语义表示
+        2. 估计用户基线 → 了解用户的表达习惯
+        3. 原始情绪分类 → 直接预测情绪(不考虑习惯)
+        4. 因果干预 → 移除习惯影响,得到真实情绪
         Args:
             input_ids: 输入ID [batch_size, seq_len]
             attention_mask: 注意力掩码 [batch_size, seq_len]
@@ -259,7 +277,11 @@ class CPEBModel(nn.Module):
             return_baseline: 是否返回基线
             
         Returns:
-            输出字典
+            emotion_raw: 原始情绪表示 [batch_size, num_emotions]
+            emotion_debiased: 去偏后的情绪表示 [batch_size, num_emotions]
+            emotion_logits: 情绪分类结果 [batch_size, num_emotions]
+            baseline_mean: 用户基线均值 [batch_size, num_emotions]
+            baseline_logvar: 用户基线方差 [batch_size, num_emotions]
         """
         # 1. 编码文本
         text_features = self.encode_text(input_ids, attention_mask)
@@ -280,8 +302,8 @@ class CPEBModel(nn.Module):
             'emotion_raw': emotion_raw,
             'emotion_debiased': emotion_debiased,
             'emotion_logits': emotion_logits,
-            'baseline_mean': baseline_mean,
-            'baseline_logvar': baseline_logvar,
+            'baseline_mean': baseline_mean,#用于KL散度计算
+            'baseline_logvar': baseline_logvar,#用于KL散度计算
             'text_features': text_features
         }
         

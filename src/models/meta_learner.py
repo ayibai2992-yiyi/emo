@@ -14,9 +14,15 @@ from collections import OrderedDict
 
 
 class PrototypicalNetwork(nn.Module):
-    """
+    """  
     原型网络
     学习用户情绪表达的原型表示
+    核心思想：
+    1. 输入特征编码为隐藏层表示
+    2. 计算每个类别的原型向量
+    3. 计算查询样本到原型的距离
+    4. 转换为概率（负距离的softmax）
+    为每个用户学习个性化的情绪原型，新样本通过计算与各个原型计算距离，转换为概率（负距离的softmax）
     """
     
     def __init__(self, input_size: int = 768, hidden_size: int = 256, num_emotions: int = 8):
@@ -33,7 +39,11 @@ class PrototypicalNetwork(nn.Module):
         self.hidden_size = hidden_size
         self.num_emotions = num_emotions
         
-        # 特征编码器
+        '''
+        特征编码器
+        输入 -> 隐藏层表示
+        3层全连接 + ReLU + Dropout
+        '''
         self.encoder = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.ReLU(),
@@ -70,6 +80,13 @@ class PrototypicalNetwork(nn.Module):
             
         Returns:
             原型向量 [num_emotions, hidden_size]
+
+        数学公式：
+        p_c = (1/|S_c|) * Σ_{x_i ∈ S_c} f(x_i)
+        其中:
+        - p_c: 类别c的原型
+        - S_c: 属于类别c的支持集样本
+        - f(): 编码器函数
         """
         prototypes = []
         for emotion_id in range(self.num_emotions):
@@ -97,8 +114,10 @@ class PrototypicalNetwork(nn.Module):
             
         Returns:
             距离矩阵 [n_query, num_emotions]
+        数学公式：
+        使用欧氏距离(Euclidean Distance):
+        d(x, p) = ||x - p||² = Σ(x_i - p_i)²
         """
-        # 欧氏距离
         n_query = query_features.size(0)
         n_proto = prototypes.size(0)
         
@@ -124,6 +143,11 @@ class PrototypicalNetwork(nn.Module):
             
         Returns:
             预测概率 [n_query, num_emotions]
+        
+        预测流程：
+        1. 用支持集建立情绪的原型
+        2. 计算查询样本到各个原型的距离
+        3. 转换为概率（负距离的softmax）距离越近，概率越大
         """
         # 计算原型
         prototypes = self.compute_prototypes(support_features, support_labels)
@@ -159,7 +183,7 @@ class MAMLAdapter(nn.Module):
             input_size: 输入特征大小
             hidden_size: 隐藏层大小
             num_emotions: 情绪类别数
-            inner_lr: 内层学习率
+            inner_lr: 内层学习率（使用常见的0.01 未测试其他学习率效果）
             num_inner_steps: 内层更新步数
         """
         super().__init__()
@@ -169,7 +193,7 @@ class MAMLAdapter(nn.Module):
         self.inner_lr = inner_lr
         self.num_inner_steps = num_inner_steps
         
-        # 快速适应网络（轻量级）
+        # 快速适应网络（轻量级） 使用OrderedDict按照名称访问和便于修改参数
         self.adapter = nn.Sequential(OrderedDict([
             ('fc1', nn.Linear(input_size, hidden_size)),
             ('relu1', nn.ReLU()),

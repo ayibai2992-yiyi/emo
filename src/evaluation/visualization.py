@@ -5,7 +5,6 @@
 1. 绘制延迟分布图时，如果第二层没有结果，则不绘制第二层延迟
 2. 混淆矩阵的标签需要支持中文显示
 3. 绘制混淆矩阵时，如果标签数量小于5，则不绘制
-4.
 """
 
 import matplotlib
@@ -63,8 +62,9 @@ class EmotionMonitoringVisualizer:
         if not self.results:
             print("没有结果数据")
             return
-        
+        #第一层
         layer1_latencies = [r.get('layer1_latency', 0) for r in self.results]
+        #第二层
         layer2_results = [r for r in self.results if r.get('need_deep_analysis')]
         layer2_latencies = [r.get('layer2_latency', 0) for r in layer2_results]
         
@@ -104,7 +104,7 @@ class EmotionMonitoringVisualizer:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
         
-        print(f"✅ 延迟分布图已保存: {save_path}")
+        print(f"延迟分布图已保存: {save_path}")
     
     def plot_confusion_matrix(
         self,
@@ -143,7 +143,7 @@ class EmotionMonitoringVisualizer:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
         
-        print(f"✅ 混淆矩阵已保存: {save_path}")
+        print(f"混淆矩阵已保存: {save_path}")
     
     def plot_emotion_radar(
         self,
