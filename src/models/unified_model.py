@@ -5,6 +5,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from transformers import AutoModel, AutoTokenizer
@@ -12,6 +13,114 @@ from transformers import AutoModel, AutoTokenizer
 from .cpeb import CPEBModel
 from .meta_learner import MetaEmotionAdapter
 from .thegn import THEGNModel, create_dialogue_graph, HeteroGraph
+
+
+class EvidenceAwareFusion(nn.Module):
+    """
+    证据可靠性感知融合模块。
+
+    不再把三路输出简单拼接，而是结合文本上下文、分支置信度/熵和图可用性，
+    为 CPEB、MEA、THEGN 动态学习样本级融合权重。
+    """
+
+    def __init__(
+        self,
+        num_emotions: int,
+        context_size: int,
+        hidden_size: int,
+        dropout: float = 0.1
+    ):
+        super().__init__()
+        self.num_branches = 3
+        self.num_emotions = num_emotions
+
+        self.branch_projectors = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(num_emotions, hidden_size),
+                nn.ReLU(),
+                nn.Dropout(dropout)
+            )
+            for _ in range(self.num_branches)
+        ])
+
+        self.context_projector = nn.Sequential(
+            nn.Linear(context_size, hidden_size),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        reliability_size = self.num_branches * (num_emotions + 3)
+        self.gate_network = nn.Sequential(
+            nn.Linear(hidden_size + reliability_size, hidden_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, self.num_branches)
+        )
+
+        self.output_layer = nn.Sequential(
+            nn.LayerNorm(hidden_size),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, num_emotions)
+        )
+
+    def _normalise_distribution(self, probs: torch.Tensor) -> torch.Tensor:
+        """把任意非负分支证据归一化为概率分布，减少上游尺度差异。"""
+        probs = torch.clamp(probs, min=1e-8)
+        return probs / probs.sum(dim=1, keepdim=True).clamp_min(1e-8)
+
+    def _reliability_features(
+        self,
+        probs: torch.Tensor,
+        availability: torch.Tensor
+    ) -> torch.Tensor:
+        confidence = probs.max(dim=1, keepdim=True).values
+        entropy = -(probs * probs.clamp_min(1e-8).log()).sum(dim=1, keepdim=True)
+        entropy = entropy / np.log(self.num_emotions)
+        return torch.cat([probs, confidence, 1.0 - entropy, availability], dim=1)
+
+    def forward(
+        self,
+        emotion_debiased: torch.Tensor,
+        emotion_adapted: torch.Tensor,
+        emotion_graph: torch.Tensor,
+        text_features: torch.Tensor,
+        graph_availability: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        cpeb_probs = self._normalise_distribution(emotion_debiased)
+        meta_probs = self._normalise_distribution(emotion_adapted)
+        graph_probs = self._normalise_distribution(emotion_graph)
+
+        branch_probs = [cpeb_probs, meta_probs, graph_probs]
+        context = self.context_projector(text_features)
+
+        projected = torch.stack([
+            projector(probs)
+            for projector, probs in zip(self.branch_projectors, branch_probs)
+        ], dim=1)
+
+        always_available = torch.ones_like(graph_availability)
+        reliability = torch.cat([
+            self._reliability_features(cpeb_probs, always_available),
+            self._reliability_features(meta_probs, always_available),
+            self._reliability_features(graph_probs, graph_availability),
+        ], dim=1)
+
+        gate_logits = self.gate_network(torch.cat([context, reliability], dim=1))
+        fusion_weights = F.softmax(gate_logits, dim=1)
+
+        fused_evidence = torch.sum(projected * fusion_weights.unsqueeze(-1), dim=1)
+        fusion_logits = self.output_layer(fused_evidence + context)
+        emotion_final = F.softmax(fusion_logits, dim=1)
+
+        return {
+            'fusion_logits': fusion_logits,
+            'emotion_final': emotion_final,
+            'fusion_weights': fusion_weights,
+            'branch_probabilities': torch.stack(branch_probs, dim=1),
+            'reliability_features': reliability
+        }
 
 
 class UnifiedEmotionModel(nn.Module):
@@ -87,16 +196,43 @@ class UnifiedEmotionModel(nn.Module):
             dropout=dropout
         )
         
-        # 融合层
-        self.fusion_layer = nn.Sequential(
-            nn.Linear(num_emotions * 3, graph_hidden_size),
+        # 无历史或图缺失时的可学习退化路径，避免 THEGN 分支以零向量污染融合。
+        self.graph_fallback = nn.Sequential(
+            nn.Linear(hidden_size, graph_hidden_size),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(graph_hidden_size, num_emotions)
         )
+
+        # 证据可靠性感知融合层
+        self.fusion_layer = EvidenceAwareFusion(
+            num_emotions=num_emotions,
+            context_size=hidden_size,
+            hidden_size=graph_hidden_size,
+            dropout=dropout
+        )
         
         # 情绪标签
         self.emotion_labels = ['中性', '高兴', '惊讶', '悲伤', '愤怒', '恐惧', '厌恶', '绝望']
+
+    def _move_graph_to_device(self, graph: HeteroGraph, device: torch.device) -> HeteroGraph:
+        """保证图张量与当前 batch 在同一设备上，便于 GPU 推理和训练。"""
+        return HeteroGraph(
+            node_features=graph.node_features.to(device),
+            node_types=graph.node_types.to(device),
+            node_times=graph.node_times.to(device),
+            edge_index=graph.edge_index.to(device),
+            edge_types=graph.edge_types.to(device),
+            edge_weights=graph.edge_weights.to(device),
+            num_nodes=graph.num_nodes,
+            num_edges=graph.num_edges,
+            num_node_types=graph.num_node_types,
+            num_edge_types=graph.num_edge_types
+        )
+
+    def _graph_fallback_distribution(self, text_features: torch.Tensor) -> torch.Tensor:
+        """基于当前文本语义生成 THEGN 缺失时的可训练替代证据。"""
+        return F.softmax(self.graph_fallback(text_features), dim=1)
     
     def forward(
         self,
@@ -148,41 +284,52 @@ class UnifiedEmotionModel(nn.Module):
             # 无支持集，使用默认预测
             emotion_adapted = self.meta_adapter(text_features)
         
-        # Stage 3: THEGN - 图网络时序建模
-        if conversation_graphs is not None and len(conversation_graphs) > 0:
-            # 使用图网络
-            graph_emotions = []
-            for i in range(batch_size):
-                if i < len(conversation_graphs):
-                    graph = conversation_graphs[i]
-                    graph_output = self.thegn_model(graph)
-                    # 取最后一个节点的情绪（当前轮次）
-                    emotion_graph = graph_output['probabilities'][-1]
-                    graph_emotions.append(emotion_graph)
-                else:
-                    # 没有图，使用零向量
-                    graph_emotions.append(torch.zeros(self.num_emotions).to(self.device))
-            
-            emotion_graph = torch.stack(graph_emotions)
-        else:
-            # 无图，使用零向量
-            emotion_graph = torch.zeros(batch_size, self.num_emotions).to(self.device)
+        # Stage 3: THEGN - 图网络时序建模；缺失图走可学习退化路径
+        fallback_graph = self._graph_fallback_distribution(text_features)
+        graph_emotions = []
+        graph_availability = []
+        for i in range(batch_size):
+            has_graph = (
+                conversation_graphs is not None
+                and i < len(conversation_graphs)
+                and conversation_graphs[i] is not None
+                and conversation_graphs[i].num_nodes > 0
+                and conversation_graphs[i].num_edges > 0
+            )
+
+            if has_graph:
+                graph = self._move_graph_to_device(conversation_graphs[i], text_features.device)
+                graph_output = self.thegn_model(graph)
+                # 取最后一个节点的情绪（当前轮次）
+                graph_emotions.append(graph_output['probabilities'][-1])
+                graph_availability.append(1.0)
+            else:
+                graph_emotions.append(fallback_graph[i])
+                graph_availability.append(0.0)
+
+        emotion_graph = torch.stack(graph_emotions)
+        graph_availability = torch.tensor(
+            graph_availability,
+            dtype=text_features.dtype,
+            device=text_features.device
+        ).unsqueeze(1)
         
-        # Stage 4: 融合三个模块的输出
-        # 拼接三个情绪分布
-        combined = torch.cat([
-            emotion_debiased,
-            emotion_adapted,
-            emotion_graph
-        ], dim=1)  # [batch_size, num_emotions * 3]
-        
-        # 融合
-        fusion_logits = self.fusion_layer(combined)
-        emotion_final = torch.softmax(fusion_logits, dim=1)
+        # Stage 4: 证据可靠性感知融合
+        fusion_outputs = self.fusion_layer(
+            emotion_debiased=emotion_debiased,
+            emotion_adapted=emotion_adapted,
+            emotion_graph=emotion_graph,
+            text_features=text_features,
+            graph_availability=graph_availability
+        )
+        fusion_logits = fusion_outputs['fusion_logits']
+        emotion_final = fusion_outputs['emotion_final']
         
         outputs = {
             'emotion_final': emotion_final,
             'fusion_logits': fusion_logits,
+            'fusion_weights': fusion_outputs['fusion_weights'],
+            'graph_availability': graph_availability,
         }
         
         if return_intermediate:
@@ -190,6 +337,8 @@ class UnifiedEmotionModel(nn.Module):
                 'emotion_debiased': emotion_debiased,
                 'emotion_adapted': emotion_adapted,
                 'emotion_graph': emotion_graph,
+                'branch_probabilities': fusion_outputs['branch_probabilities'],
+                'reliability_features': fusion_outputs['reliability_features'],
                 'text_features': text_features,
                 'baseline_mean': cpeb_outputs['baseline_mean'],
                 'baseline_logvar': cpeb_outputs['baseline_logvar']
@@ -312,7 +461,9 @@ class UnifiedEmotionModel(nn.Module):
             'intermediate_results': {
                 'cpeb_emotion': outputs['emotion_debiased'][0].cpu().numpy().tolist(),
                 'meta_emotion': outputs['emotion_adapted'][0].cpu().numpy().tolist(),
-                'graph_emotion': outputs['emotion_graph'][0].cpu().numpy().tolist()
+                'graph_emotion': outputs['emotion_graph'][0].cpu().numpy().tolist(),
+                'fusion_weights': outputs['fusion_weights'][0].cpu().numpy().tolist(),
+                'graph_available': bool(outputs['graph_availability'][0].item() > 0.5)
             }
         }
         
