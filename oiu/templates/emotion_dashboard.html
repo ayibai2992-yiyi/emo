@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>情绪监测 — 论文展示面板</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #151c24;
+      --muted: #8b98a5;
+      --text: #e7eef7;
+      --accent: #3da9fc;
+      --danger: #ff6b6b;
+      --ok: #51cf66;
+      --warn: #fcc419;
+      --border: #243041;
+      --bar-bg: #1f2937;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #1a2740 0%, var(--bg) 55%);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header { padding: 20px 24px 8px; border-bottom: 1px solid var(--border); }
+    header h1 { margin: 0 0 6px; font-size: 1.35rem; font-weight: 650; letter-spacing: 0.02em; }
+    header p { margin: 0; color: var(--muted); font-size: 0.92rem; }
+    main { padding: 18px 24px 48px; max-width: 1240px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 16px; }
+    @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: linear-gradient(180deg, #182131 0%, var(--panel) 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 16px 14px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    }
+    .card h2 { margin: 0 0 12px; font-size: 1.02rem; color: #dbe7fb; }
+    .card h3 { margin: 0 0 10px; font-size: 0.95rem; color: #cbd5e1; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin: 10px 0 6px; }
+    input[type="text"], textarea, select {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0f1724;
+      color: var(--text);
+      padding: 10px 12px;
+      outline: none;
+    }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    textarea { min-height: 100px; resize: vertical; font-family: inherit; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-weight: 650;
+      cursor: pointer;
+      background: linear-gradient(135deg, #2f80ed, #56ccf2);
+      color: #071018;
+    }
+    button.secondary { background: #243041; color: var(--text); border: 1px solid var(--border); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 999px; font-size: 0.78rem;
+      border: 1px solid var(--border); color: var(--muted);
+    }
+    .kv { display: grid; grid-template-columns: 150px 1fr; gap: 8px 12px; font-size: 0.9rem; }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    .bars { margin-top: 10px; }
+    .barline { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+    .barline span:first-child { width: 56px; font-size: 0.82rem; color: #cbd5e1; }
+    .bar {
+      flex: 1; height: 10px; border-radius: 999px; background: var(--bar-bg);
+      overflow: hidden; border: 1px solid #111827;
+    }
+    .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #56ccf2, #7c3aed); width: 0%; }
+    .error { color: var(--danger); font-size: 0.9rem; margin-top: 10px; white-space: pre-wrap; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 8px; }
+    th, td { border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: left; vertical-align: top; }
+    th { color: #cbd5e1; font-weight: 650; }
+    .muted { color: var(--muted); font-size: 0.85rem; }
+    .risk-red { color: var(--danger); font-weight: 700; }
+    .risk-orange { color: #ff922b; font-weight: 700; }
+    .risk-blue { color: var(--accent); font-weight: 650; }
+    .risk-green { color: var(--ok); font-weight: 650; }
+    #timelineCanvas { width: 100%; max-width: 100%; height: 220px; background: #0b1017; border-radius: 10px; border: 1px solid var(--border); }
+    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>情绪监测 · 论文展示面板</h1>
+    <p>真实推理字段 + 时间轴趋势 + 分用户对比 + 阈值回放 + 批量导出（CSV/JSON）。</p>
+  </header>
+  <main>
+    <div class="grid">
+      <section class="card">
+        <h2>单次分析</h2>
+        <label for="userId">用户</label>
+        <select id="userId">
+          <option value="user001">user001（内敛型基线）</option>
+          <option value="user002">user002（外放型基线）</option>
+        </select>
+        <label for="text">当前消息</label>
+        <textarea id="text" placeholder="待分析文本…"></textarea>
+        <label for="hist">对话历史（每行一条，旧→新）</label>
+        <textarea id="hist" placeholder="可选"></textarea>
+
+        <h3 style="margin-top:16px">阈值调参回放</h3>
+        <p class="muted">拖动后点「分析」或「仅回放阈值重新分析」；第二层阈值为对动态阈值的<strong>乘子</strong>（&lt;1 更易触发高等级）。</p>
+        <label>第一层深度触发阈值 <span id="l1Val" class="pill"></span></label>
+        <input type="range" id="sliderL1" min="4" max="10" step="0.1" value="7" />
+        <label>第二层阈值乘子 <span id="l2Val" class="pill"></span></label>
+        <input type="range" id="sliderL2" min="0.65" max="1.35" step="0.01" value="1" />
+        <label class="row" style="margin-top:8px;align-items:center;gap:8px;">
+          <input type="checkbox" id="chkLayer1" checked /> 启用第一层快筛（取消=消融「无快筛」）
+        </label>
+
+        <div class="row" style="margin-top: 12px;">
+          <button id="runBtn" type="button">分析</button>
+          <button id="replayBtn" type="button" class="secondary">用当前阈值重新分析</button>
+          <button id="loadBaseBtn" type="button" class="secondary">刷新基线</button>
+          <span id="status" class="pill">就绪</span>
+        </div>
+        <div class="row" style="margin-top: 14px;">
+          <input type="file" id="csvFile" accept=".csv,text/csv" />
+          <button id="csvBtn" type="button" class="secondary">CSV 批量</button>
+        </div>
+        <div id="err" class="error" style="display:none;"></div>
+      </section>
+
+      <section class="card">
+        <h2>基线摘要</h2>
+        <div id="baseBox" class="muted">点击「刷新基线」。</div>
+        <h3 style="margin-top:18px">导出会话记录</h3>
+        <p class="muted">含时间轴上每次分析的风险分、用户、阈值覆盖等。</p>
+        <div class="row">
+          <button id="exportJsonBtn" type="button" class="secondary">导出 JSON</button>
+          <button id="exportCsvBtn" type="button" class="secondary">导出 CSV</button>
+          <button id="clearLogBtn" type="button" class="secondary">清空时间轴</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top: 16px;">
+      <h2>时间轴 · 风险趋势</h2>
+      <p class="muted">每次「分析」后追加一点；横轴为序号，纵轴为最终风险分（0–10）。</p>
+      <canvas id="timelineCanvas" width="1100" height="220"></canvas>
+    </section>
+
+    <section class="card" style="margin-top: 16px;">
+      <h2>分用户对比（基于会话记录）</h2>
+      <div id="userCompare">暂无数据</div>
+    </section>
+
+    <section class="card" style="margin-top: 16px;">
+      <h2>JSON 批量分析</h2>
+      <p class="muted">格式：<code>[{"text":"...","user_id":"user001","conversation_history":["上一句"]}]</code>，与 <code>POST /api/batch_analyze</code> 一致。</p>
+      <textarea id="batchJson" class="mono" style="min-height:140px" placeholder='[{"text":"今天很累","user_id":"user001","conversation_history":[]}]'></textarea>
+      <div class="row" style="margin-top:10px;">
+        <button id="batchRunBtn" type="button">批量运行</button>
+        <button id="exportBatchJsonBtn" type="button" class="secondary">导出上次批量 JSON</button>
+        <button id="exportBatchCsvBtn" type="button" class="secondary">导出上次批量 CSV</button>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top: 16px;">
+      <h2>当前推理详情</h2>
+      <div id="out" class="muted">提交分析后展示。</div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    const errEl = $("err");
+
+    const thesisLog = [];
+    const MAX_LOG = 200;
+    let lastBatchResults = null;
+    let defaultL1 = 7;
+
+    function setStatus(t) { statusEl.textContent = t; }
+    function showErr(msg) {
+      if (!msg) { errEl.style.display = "none"; errEl.textContent = ""; return; }
+      errEl.style.display = "block";
+      errEl.textContent = msg;
+    }
+
+    function readSliders() {
+      const l1 = parseFloat($("sliderL1").value);
+      const l2f = parseFloat($("sliderL2").value);
+      $("l1Val").textContent = l1.toFixed(1);
+      $("l2Val").textContent = l2f.toFixed(2);
+      return { l1, l2f };
+    }
+
+    ["sliderL1","sliderL2"].forEach(id => $(id).addEventListener("input", readSliders));
+
+    function buildAnalyzeBody(text, user_id, conversation_history) {
+      const { l1, l2f } = readSliders();
+      const useL1 = $("chkLayer1").checked;
+      return {
+        text, user_id, conversation_history,
+        layer1_threshold: l1,
+        layer2_threshold_factor: l2f,
+        pipeline_ablation: { use_layer1: useL1 },
+      };
+    }
+
+    function pushThesisLog(result) {
+      const fin = result.final || {};
+      const l1 = result.layer1 || {};
+      const ovr = result.overrides || {};
+      thesisLog.push({
+        t: new Date().toISOString(),
+        user_id: result.user_id,
+        text_preview: (result.text || "").slice(0, 80),
+        risk_score: fin.risk_score,
+        risk_level: fin.risk_level,
+        need_deep: !!result.need_deep_analysis,
+        layer1_score: l1.score,
+        layer1_threshold: ovr.layer1_threshold,
+        layer2_threshold_factor: ovr.layer2_threshold_factor,
+        model_backend: result.model_backend,
+      });
+      while (thesisLog.length > MAX_LOG) thesisLog.shift();
+      drawTimeline();
+      renderUserCompare();
+    }
+
+    function drawTimeline() {
+      const c = $("timelineCanvas");
+      const ctx = c.getContext("2d");
+      const w = c.width, h = c.height;
+      ctx.fillStyle = "#0b1017";
+      ctx.fillRect(0,0,w,h);
+      ctx.strokeStyle = "#243041";
+      ctx.lineWidth = 1;
+      for (let y = 0; y <= 10; y += 2) {
+        const py = h - 24 - (y/10) * (h - 40);
+        ctx.beginPath();
+        ctx.moveTo(40, py);
+        ctx.lineTo(w-12, py);
+        ctx.stroke();
+        ctx.fillStyle = "#6b7280";
+        ctx.font = "11px sans-serif";
+        ctx.fillText(String(y), 8, py+4);
+      }
+      if (thesisLog.length < 2) {
+        ctx.fillStyle = "#8b98a5";
+        ctx.font = "14px sans-serif";
+        ctx.fillText(thesisLog.length ? "再分析一次以显示折线" : "暂无点", w/2 - 60, h/2);
+        return;
+      }
+      const padL = 40, padR = 12, padB = 24, padT = 16;
+      const xs = thesisLog.map((_, i) => padL + (i / (thesisLog.length-1)) * (w - padL - padR));
+      const ys = thesisLog.map(e => h - padB - (Number(e.risk_score)||0) / 10 * (h - padT - padB));
+      ctx.strokeStyle = "#56ccf2";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      xs.forEach((x, i) => { if (i===0) ctx.moveTo(x, ys[i]); else ctx.lineTo(x, ys[i]); });
+      ctx.stroke();
+      ctx.fillStyle = "#fcc419";
+      xs.forEach((x, i) => {
+        ctx.beginPath();
+        ctx.arc(x, ys[i], 4, 0, Math.PI*2);
+        ctx.fill();
+      });
+    }
+
+    function renderUserCompare() {
+      const by = {};
+      thesisLog.forEach(e => {
+        const u = e.user_id || "?";
+        if (!by[u]) by[u] = { n: 0, sum: 0, last: "-" };
+        by[u].n++;
+        by[u].sum += Number(e.risk_score) || 0;
+        by[u].last = e.risk_level || "-";
+      });
+      const rows = Object.keys(by).map(u => {
+        const b = by[u];
+        const avg = b.n ? (b.sum / b.n).toFixed(3) : "-";
+        return `<tr><td>${u}</td><td>${b.n}</td><td>${avg}</td><td>${b.last}</td></tr>`;
+      }).join("");
+      $("userCompare").innerHTML = rows
+        ? `<table><thead><tr><th>用户</th><th>样本数</th><th>平均风险</th><th>最近等级</th></tr></thead><tbody>${rows}</tbody></table>`
+        : "<span class='muted'>暂无数据</span>";
+    }
+
+    async function postJSON(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      return data;
+    }
+
+    function riskClass(level) {
+      if (level === "red") return "risk-red";
+      if (level === "orange") return "risk-orange";
+      if (level === "blue") return "risk-blue";
+      return "risk-green";
+    }
+
+    function renderBars(dist) {
+      const entries = Object.entries(dist || {});
+      if (!entries.length) return "<p class='muted'>无分布数据</p>";
+      const maxv = Math.max(1e-6, ...entries.map(([, v]) => Number(v) || 0));
+      return `<div class="bars">` + entries.map(([k, v]) => {
+        const p = (100 * (Number(v) || 0) / maxv).toFixed(1);
+        return `<div class="barline"><span>${k}</span><div class="bar"><i style="width:${p}%"></i></div><span class="muted">${(Number(v)||0).toFixed(4)}</span></div>`;
+      }).join("") + `</div>`;
+    }
+
+    function renderStages(st) {
+      if (!st) return "";
+      const rows = ["emotion_raw", "emotion_debiased", "emotion_adapted", "emotion_final"];
+      let html = `<h3 style="margin:16px 0 8px;font-size:0.95rem;color:#dbe7fb">多阶段向量</h3><table><thead><tr><th>阶段</th><th>向量 (8 维)</th></tr></thead><tbody>`;
+      for (const key of rows) {
+        const vec = st[key];
+        if (!vec) continue;
+        html += `<tr><td>${key}</td><td><code>${vec.map(x => Number(x).toFixed(4)).join(", ")}</code></td></tr>`;
+      }
+      html += `</tbody></table>`;
+      return html;
+    }
+
+    function renderResult(r) {
+      const l1 = r.layer1 || {};
+      const fin = r.final || {};
+      const l2 = r.layer2;
+      const ovr = r.overrides || {};
+
+      let html = `<div class="kv" style="margin-top:6px">
+        <div>阈值回放</div><div>layer1=${ovr.layer1_threshold ?? "-"}，L2×=${ovr.layer2_threshold_factor ?? 1}</div>
+        <div>期望后端</div><div>${r.preferred_model_backend ?? "-"}</div>
+        <div>本次后端</div><div>${r.model_backend ?? "-"}${l2 && l2.backend ? "（第二层: " + l2.backend + "）" : ""}</div>
+        <div>触发深度分析</div><div>${r.need_deep_analysis ? "是" : "否"}</div>
+        <div>第一层延迟</div><div>${(l1.latency_ms ?? 0).toFixed ? l1.latency_ms.toFixed(2) : l1.latency_ms} ms</div>
+        <div>第一层综合分</div><div>${(l1.score ?? 0).toFixed ? l1.score.toFixed(3) : l1.score}（阈值 ${(l1.deep_threshold_applied ?? "").toString().slice(0,6)}）</div>
+        <div>第一层分量</div><div>关键词 ${(l1.components?.keyword_score ?? 0).toFixed ? l1.components.keyword_score.toFixed(2) : l1.components?.keyword_score}
+          ，模式 ${(l1.components?.pattern_score ?? 0).toFixed ? l1.components.pattern_score.toFixed(2) : l1.components?.pattern_score}
+          ，BERT ${(l1.components?.bert_score ?? 0).toFixed ? l1.components.bert_score.toFixed(2) : l1.components?.bert_score}</div>
+        <div>最终风险分</div><div><span class="${riskClass(fin.risk_level)}">${(fin.risk_score ?? 0).toFixed ? fin.risk_score.toFixed(3) : fin.risk_score}</span> / 10</div>
+        <div>最终等级</div><div class="${riskClass(fin.risk_level)}">${fin.risk_level || "-"} — ${fin.risk_label || ""}</div>
+        <div>需要预警</div><div>${fin.need_alert ? "是" : "否"}</div>
+        <div>第二层延迟</div><div>${(fin.latency_ms_layer2 ?? 0).toFixed ? fin.latency_ms_layer2.toFixed(2) : fin.latency_ms_layer2} ms</div>
+      </div>`;
+
+      if (l2) {
+        html += `<h3 style="margin:16px 0 8px;font-size:0.95rem;color:#dbe7fb">情绪分布（第二层）</h3>`;
+        html += renderBars(l2.emotion_distribution);
+        html += renderStages(l2.stages);
+        const att = l2.attention_weights || {};
+        if ((att.temporal || []).length) {
+          html += `<h3 style="margin:16px 0 8px;font-size:0.95rem;color:#dbe7fb">时序注意力</h3>`;
+          html += `<table><thead><tr><th>#</th><th>权重</th><th>压力</th></tr></thead><tbody>`;
+          const ts = att.temporal || [];
+          const ss = att.turn_stress || [];
+          for (let i = 0; i < ts.length; i++) {
+            html += `<tr><td>${i + 1}</td><td>${Number(ts[i]).toFixed(4)}</td><td>${ss[i] !== undefined ? Number(ss[i]).toFixed(4) : "-"}</td></tr>`;
+          }
+          html += `</tbody></table>`;
+        }
+        if (l2.thresholds) {
+          html += `<h3 style="margin:16px 0 8px;font-size:0.95rem;color:#dbe7fb">动态阈值（已应用回放乘子）</h3><div class="kv">`;
+          for (const [k, v] of Object.entries(l2.thresholds)) {
+            html += `<div>${k}</div><div>${Number(v).toFixed(3)}</div>`;
+          }
+          html += `</div>`;
+        }
+        if (l2.threshold_replay) {
+          html += `<p class="muted">第二层回放乘子: ${l2.threshold_replay.layer2_threshold_factor}</p>`;
+        }
+      }
+
+      $("out").innerHTML = html;
+    }
+
+    async function runAnalyze() {
+      showErr("");
+      const text = $("text").value.trim();
+      if (!text) { showErr("请输入文本"); return; }
+      const user_id = $("userId").value;
+      const histRaw = $("hist").value || "";
+      const conversation_history = histRaw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      setStatus("请求中…");
+      const body = buildAnalyzeBody(text, user_id, conversation_history);
+      const data = await postJSON("/api/analyze", body);
+      if (!data.ok) throw new Error(data.error || "未知错误");
+      renderResult(data.result);
+      pushThesisLog(data.result);
+      setStatus("完成");
+    }
+
+    $("runBtn").addEventListener("click", async () => {
+      $("runBtn").disabled = true;
+      try { await runAnalyze(); }
+      catch (e) { setStatus("失败"); showErr(String(e.message || e)); }
+      finally { $("runBtn").disabled = false; }
+    });
+
+    $("replayBtn").addEventListener("click", async () => {
+      $("replayBtn").disabled = true;
+      try { await runAnalyze(); }
+      catch (e) { setStatus("失败"); showErr(String(e.message || e)); }
+      finally { $("replayBtn").disabled = false; }
+    });
+
+    $("loadBaseBtn").addEventListener("click", async () => {
+      showErr("");
+      setStatus("加载基线…");
+      try {
+        const data = await fetch("/api/baselines").then(r => r.json());
+        if (!data.ok) throw new Error(data.error || "未知错误");
+        const users = data.users || [];
+        $("baseBox").innerHTML = users.map(u => `
+          <div style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #243041">
+            <div><strong>${u.user_id}</strong> · ${u.expression_style} · n=${u.history_count}</div>
+            <div class="muted" style="margin-top:6px">mean: <code>${(u.mean_emotion||[]).map(x=>Number(x).toFixed(3)).join(", ")}</code></div>
+          </div>`).join("") || "<span class='muted'>无</span>";
+        setStatus("就绪");
+      } catch (e) { setStatus("失败"); showErr(String(e.message || e)); }
+    });
+
+    function downloadBlob(filename, mime, text) {
+      const blob = new Blob([text], { type: mime });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    $("exportJsonBtn").addEventListener("click", () => {
+      downloadBlob("thesis_session_" + Date.now() + ".json", "application/json", JSON.stringify(thesisLog, null, 2));
+    });
+
+    $("exportCsvBtn").addEventListener("click", () => {
+      const cols = ["t","user_id","risk_score","risk_level","need_deep","layer1_score","layer1_threshold","layer2_threshold_factor","text_preview"];
+      const lines = [cols.join(",")];
+      thesisLog.forEach(e => {
+        lines.push(cols.map(c => {
+          let v = e[c] ?? "";
+          if (typeof v === "string" && (v.includes(",") || v.includes("\""))) v = '"' + v.replace(/"/g,'""') + '"';
+          return v;
+        }).join(","));
+      });
+      downloadBlob("thesis_session_" + Date.now() + ".csv", "text/csv;charset=utf-8", "\uFEFF" + lines.join("\n"));
+    });
+
+    $("clearLogBtn").addEventListener("click", () => {
+      thesisLog.length = 0;
+      drawTimeline();
+      renderUserCompare();
+    });
+
+    $("csvBtn").addEventListener("click", async () => {
+      showErr("");
+      const f = $("csvFile").files[0];
+      if (!f) { showErr("请选择 CSV"); return; }
+      const fd = new FormData();
+      fd.append("file", f, f.name);
+      $("csvBtn").disabled = true;
+      setStatus("CSV 批量…");
+      try {
+        const res = await fetch("/api/batch_csv", { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || ("HTTP " + res.status));
+        lastBatchResults = data.results || [];
+        (data.results || []).forEach(r => pushThesisLog(r));
+        $("out").innerHTML = `<p class="muted">CSV 完成 ${data.count} 条</p>` +
+          `<table><thead><tr><th>#</th><th>用户</th><th>文本</th><th>深度</th><th>风险</th><th>等级</th></tr></thead><tbody>` +
+          lastBatchResults.map((r, idx) => {
+            const fin = r.final || {};
+            return `<tr><td>${idx+1}</td><td>${r.user_id||""}</td><td>${(r.text||"").slice(0,40)}</td><td>${r.need_deep_analysis?"是":"否"}</td><td>${fin.risk_score??""}</td><td>${fin.risk_level||""}</td></tr>`;
+          }).join("") + `</tbody></table>`;
+        setStatus("完成");
+      } catch (e) { setStatus("失败"); showErr(String(e.message || e)); }
+      finally { $("csvBtn").disabled = false; }
+    });
+
+    $("batchRunBtn").addEventListener("click", async () => {
+      showErr("");
+      let items;
+      try { items = JSON.parse($("batchJson").value || "[]"); }
+      catch (e) { showErr("JSON 解析失败"); return; }
+      if (!Array.isArray(items) || !items.length) { showErr("请输入非空 JSON 数组"); return; }
+      const { l1, l2f } = readSliders();
+      const useL1 = $("chkLayer1").checked;
+      $("batchRunBtn").disabled = true;
+      setStatus("批量 JSON…");
+      try {
+        const data = await postJSON("/api/batch_analyze", {
+          items,
+          layer1_threshold: l1,
+          layer2_threshold_factor: l2f,
+          pipeline_ablation: { use_layer1: useL1 },
+        });
+        if (!data.ok) throw new Error(data.error || "未知错误");
+        lastBatchResults = data.results || [];
+        lastBatchResults.forEach(r => pushThesisLog(r));
+        $("out").innerHTML = `<p class="muted">JSON 批量 ${data.count} 条</p>` +
+          `<table><thead><tr><th>#</th><th>用户</th><th>风险</th><th>等级</th></tr></thead><tbody>` +
+          lastBatchResults.map((r, idx) => {
+            const fin = r.final || {};
+            return `<tr><td>${idx+1}</td><td>${r.user_id||""}</td><td>${fin.risk_score??""}</td><td>${fin.risk_level||""}</td></tr>`;
+          }).join("") + `</tbody></table>`;
+        setStatus("完成");
+      } catch (e) { setStatus("失败"); showErr(String(e.message || e)); }
+      finally { $("batchRunBtn").disabled = false; }
+    });
+
+    $("exportBatchJsonBtn").addEventListener("click", () => {
+      if (!lastBatchResults) { showErr("尚无批量结果"); return; }
+      downloadBlob("batch_results_" + Date.now() + ".json", "application/json", JSON.stringify(lastBatchResults, null, 2));
+      showErr("");
+    });
+
+    $("exportBatchCsvBtn").addEventListener("click", () => {
+      if (!lastBatchResults) { showErr("尚无批量结果"); return; }
+      const cols = ["user_id","text","need_deep","risk_score","risk_level","model_backend"];
+      const lines = [cols.join(",")];
+      lastBatchResults.forEach(r => {
+        const fin = r.final || {};
+        const row = [r.user_id, (r.text||"").replace(/,/g,";"), r.need_deep_analysis, fin.risk_score, fin.risk_level, r.model_backend];
+        lines.push(row.map(v => {
+          const s = String(v ?? "");
+          if (s.includes(",") || s.includes('"')) return '"' + s.replace(/"/g,'""') + '"';
+          return s;
+        }).join(","));
+      });
+      downloadBlob("batch_results_" + Date.now() + ".csv", "text/csv;charset=utf-8", "\uFEFF" + lines.join("\n"));
+      showErr("");
+    });
+
+    (async function init() {
+      readSliders();
+      try {
+        const cfg = await fetch("/api/config").then(r => r.json());
+        if (cfg.ok && cfg.layer1_threshold_default != null) {
+          defaultL1 = cfg.layer1_threshold_default;
+          $("sliderL1").value = String(defaultL1);
+          readSliders();
+        }
+      } catch (_) {}
+      drawTimeline();
+    })();
+  </script>
+</body>
+</html>

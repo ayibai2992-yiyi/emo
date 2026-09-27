@@ -1,0 +1,13 @@
+1.文章开始的数据来源：http://www.psych.ac.cn/news/cmsm/202303/t20230301_6687084.html
+第二段 http://psy.china.com.cn/2025-06/20/content_43141390.htm
+2.方针政策：http://www.moe.gov.cn/s78/A12/szs_lef/moe_1407/moe_1411/s6874/s3020/201001/t20100117_76896.html
+3.对机器感情的引入 强调必然性 对话情感识别、对话情感管理和
+对话情感表达 3 个层面逐层递进的增强对话机器人的“情商” 论文内容重点偏向文科 可以用来佐证情绪建模的作用 支持个性化这个方面 ：https://www.jos.org.cn/jos/article/pdf/6807
+4.佐证图卷积神经网络在情绪检测中的应用：https://arxiv.org/abs/1908.11540
+5.基线对比实验：https://aclanthology.org/2021.acl-long.123/
+6.怎么根基个人的个性化特点来生成连续化的回复 有技术依赖：https://www.ijcai.org/proceedings/2018/595
+7.少样本元学习方法 少量改变 单独封装 让模型易微调 迁移性强：https://arxiv.org/pdf/1703.03400
+8.因果推理：https://transacl.org/index.php/tacl/article/view/4005
+9.
+10.
+11.

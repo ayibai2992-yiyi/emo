@@ -1,0 +1,35 @@
+# env & cache
+env/
+.venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.vscode/
+*.log
+
+# large raw data (do not upload)
+data_all/
+tmp_data/
+temp/
+*.zip
+*.rar
+*.7z
+
+# heavy dirs under oiu
+oiu/.venv/
+oiu/models/
+oiu/logs/
+oiu/data/
+oiu/results/alerts/
+oiu/tests/**/*.pkl
+oiu/tests/**/*.xlsx
+oiu/tests/**/*.csv
+oiu/tests/data/
+oiu/tests/templates/
+
+# os junk
+Thumbs.db
+Desktop.ini
+.DS_Store
