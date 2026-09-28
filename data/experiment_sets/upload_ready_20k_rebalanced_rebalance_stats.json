@@ -1,0 +1,80 @@
+{
+  "input_csv": "data/upload_ready_20k_stratified_users.csv",
+  "output_csv": "data/experiment_sets/upload_ready_20k_rebalanced.csv",
+  "config": {
+    "label_col": "label_id",
+    "crisis_col": "is_crisis",
+    "neutral_label": 0,
+    "neutral_keep_ratio": 0.35,
+    "crisis_upsample_factor": 3.0,
+    "rare_labels": [
+      2,
+      3,
+      4,
+      6
+    ],
+    "rare_min_count": 800,
+    "majority_max_count": 0,
+    "seed": 42
+  },
+  "before": {
+    "rows": 20000,
+    "label_distribution": {
+      "0": 16215,
+      "1": 1363,
+      "2": 47,
+      "3": 235,
+      "4": 158,
+      "5": 1149,
+      "6": 184,
+      "7": 649
+    },
+    "crisis_distribution": {
+      "0": 19351,
+      "1": 649
+    },
+    "crisis_rate": 0.03245
+  },
+  "process": {
+    "after_neutral_downsample_rows": 9460,
+    "neutral_kept_rows": 5675,
+    "rare_upsample": {
+      "2": {
+        "before": 47,
+        "after": 800
+      },
+      "3": {
+        "before": 235,
+        "after": 800
+      },
+      "4": {
+        "before": 158,
+        "after": 800
+      },
+      "6": {
+        "before": 184,
+        "after": 800
+      }
+    },
+    "crisis_rows_before_upsample": 649,
+    "crisis_rows_after_upsample": 1947
+  },
+  "after": {
+    "rows": 13334,
+    "label_distribution": {
+      "0": 5675,
+      "1": 1363,
+      "2": 800,
+      "3": 800,
+      "4": 800,
+      "5": 1149,
+      "6": 800,
+      "7": 1947
+    },
+    "crisis_distribution": {
+      "0": 11387,
+      "1": 1947
+    },
+    "crisis_rate": 0.14601769911504425
+  }
+}

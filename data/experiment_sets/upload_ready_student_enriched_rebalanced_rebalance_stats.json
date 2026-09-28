@@ -1,0 +1,81 @@
+{
+  "input_csv": "data/external_processed/upload_ready_student_enriched.csv",
+  "output_csv": "data/experiment_sets/upload_ready_student_enriched_rebalanced.csv",
+  "config": {
+    "label_col": "label_id",
+    "crisis_col": "is_crisis",
+    "neutral_label": 0,
+    "neutral_keep_ratio": 0.55,
+    "crisis_upsample_factor": 2.5,
+    "rare_labels": [
+      2,
+      4,
+      6
+    ],
+    "rare_min_count": 800,
+    "majority_max_count": 3200,
+    "seed": 42
+  },
+  "before": {
+    "rows": 20000,
+    "label_distribution": {
+      "0": 7592,
+      "1": 939,
+      "2": 14,
+      "3": 2460,
+      "4": 55,
+      "5": 8479,
+      "6": 59,
+      "7": 402
+    },
+    "crisis_distribution": {
+      "0": 19548,
+      "1": 452
+    },
+    "crisis_rate": 0.0226
+  },
+  "process": {
+    "after_neutral_downsample_rows": 16583,
+    "neutral_kept_rows": 4175,
+    "rare_upsample": {
+      "2": {
+        "before": 14,
+        "after": 800
+      },
+      "4": {
+        "before": 55,
+        "after": 800
+      },
+      "6": {
+        "before": 59,
+        "after": 800
+      }
+    },
+    "crisis_rows_before_upsample": 454,
+    "crisis_rows_after_upsample": 1135,
+    "majority_downsample": {
+      "5": {
+        "before": 8491,
+        "after": 3200
+      }
+    }
+  },
+  "after": {
+    "rows": 14245,
+    "label_distribution": {
+      "0": 4202,
+      "1": 945,
+      "2": 800,
+      "3": 2460,
+      "4": 800,
+      "5": 3200,
+      "6": 828,
+      "7": 1010
+    },
+    "crisis_distribution": {
+      "0": 13125,
+      "1": 1120
+    },
+    "crisis_rate": 0.07862407862407862
+  }
+}

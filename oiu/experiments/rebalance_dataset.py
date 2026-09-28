@@ -36,6 +36,8 @@ class RebalanceConfig:
     neutral_label: int = 0
     neutral_keep_ratio: float = 0.4
     crisis_upsample_factor: float = 3.0
+    rare_labels: Tuple[int, ...] = (2, 4, 6)
+    rare_min_count: int = 800
     seed: int = 42
 
 
@@ -51,6 +53,7 @@ def _count_distribution(df: pd.DataFrame, label_col: str, crisis_col: str) -> Di
         "rows": int(len(df)),
         "label_distribution": {str(k): int(v) for k, v in label_dist.items()},
         "crisis_distribution": {str(k): int(v) for k, v in crisis_dist.items()},
+        "crisis_rate": float(df[crisis_col].astype(int).mean()) if len(df) else 0.0,
     }
 
 
@@ -73,10 +76,32 @@ def rebalance_dataframe(
 
     step1_df = pd.concat([neutral_kept, other_df], axis=0, ignore_index=True)
 
-    # 2) 危机样本上采样（只扩增 crisis=1）
-    crisis_mask = step1_df[crisis_col].astype(int) == 1
-    crisis_df = step1_df[crisis_mask]
-    non_crisis_df = step1_df[~crisis_mask]
+    # 2) 稀有类上采样到 rare_min_count
+    rare_parts = []
+    rare_stats = {}
+    keep_mask = pd.Series(True, index=step1_df.index)
+    for lab in cfg.rare_labels:
+        m = step1_df[label_col].astype(int) == int(lab)
+        sub = step1_df[m]
+        before_n = int(len(sub))
+        if before_n == 0:
+            rare_stats[str(lab)] = {"before": 0, "after": 0}
+            continue
+        if before_n < cfg.rare_min_count:
+            need = cfg.rare_min_count - before_n
+            extra = sub.sample(n=need, replace=True, random_state=cfg.seed + int(lab))
+            sub = pd.concat([sub, extra], axis=0, ignore_index=True)
+        rare_parts.append(sub)
+        keep_mask &= ~m
+        rare_stats[str(lab)] = {"before": before_n, "after": int(len(sub))}
+
+    step2_base = step1_df[keep_mask]
+    step2_df = pd.concat([step2_base] + rare_parts, axis=0, ignore_index=True) if rare_parts else step1_df
+
+    # 3) 危机样本上采样（只扩增 crisis=1）
+    crisis_mask = step2_df[crisis_col].astype(int) == 1
+    crisis_df = step2_df[crisis_mask]
+    non_crisis_df = step2_df[~crisis_mask]
 
     if len(crisis_df) > 0 and cfg.crisis_upsample_factor > 1.0:
         target_crisis = int(len(crisis_df) * cfg.crisis_upsample_factor)
@@ -95,6 +120,7 @@ def rebalance_dataframe(
     stats = {
         "after_neutral_downsample_rows": int(len(step1_df)),
         "neutral_kept_rows": int(len(neutral_kept)),
+        "rare_upsample": rare_stats,
         "crisis_rows_before_upsample": int(len(crisis_df)),
         "crisis_rows_after_upsample": int(len(crisis_aug)),
     }
@@ -112,6 +138,23 @@ def main() -> None:
     parser.add_argument("--crisis-upsample-factor", type=float, default=3.0, help="危机类扩增倍数，默认 3.0")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument(
+        "--rare-labels",
+        default="2,4,6",
+        help="稀有情绪标签，逗号分隔，默认 2,4,6（惊讶/愤怒/厌恶）",
+    )
+    parser.add_argument(
+        "--rare-min-count",
+        type=int,
+        default=800,
+        help="稀有类上采样目标条数，默认 800",
+    )
+    parser.add_argument(
+        "--majority-max-count",
+        type=int,
+        default=0,
+        help="非中性类若超过该数则下采样；0 表示不限制（对学生 enriched 的恐惧类建议 3000）",
+    )
+    parser.add_argument(
         "--stats-json",
         default="",
         help="统计输出 JSON 路径；不传则自动写到 output 同目录",
@@ -121,26 +164,56 @@ def main() -> None:
     _validate_ratio("neutral_keep_ratio", args.neutral_keep_ratio, 0.01, 1.0)
     _validate_ratio("crisis_upsample_factor", args.crisis_upsample_factor, 1.0, 20.0)
 
+    rare_labels = tuple(
+        int(x.strip()) for x in str(args.rare_labels).split(",") if x.strip() != ""
+    )
+
     df = pd.read_csv(args.input_csv)
-    for col in (args.label_col, args.crisis_col):
+    # 兼容 label_id / label
+    label_col = args.label_col
+    if label_col not in df.columns and label_col == "label" and "label_id" in df.columns:
+        label_col = "label_id"
+    if label_col not in df.columns and label_col == "label_id" and "label" in df.columns:
+        label_col = "label"
+    for col in (label_col, args.crisis_col):
         if col not in df.columns:
             raise ValueError(f"缺少列: {col}，当前列: {list(df.columns)}")
 
-    # 基础清洗：确保关键列有效
     work_df = df.copy()
-    work_df = work_df.dropna(subset=[args.label_col, args.crisis_col]).reset_index(drop=True)
-    work_df[args.label_col] = work_df[args.label_col].astype(int)
+    work_df = work_df.dropna(subset=[label_col, args.crisis_col]).reset_index(drop=True)
+    work_df[label_col] = work_df[label_col].astype(int)
     work_df[args.crisis_col] = work_df[args.crisis_col].astype(int).clip(0, 1)
 
-    before_stats = _count_distribution(work_df, args.label_col, args.crisis_col)
+    before_stats = _count_distribution(work_df, label_col, args.crisis_col)
     cfg = RebalanceConfig(
         neutral_label=args.neutral_label,
         neutral_keep_ratio=args.neutral_keep_ratio,
         crisis_upsample_factor=args.crisis_upsample_factor,
+        rare_labels=rare_labels,
+        rare_min_count=args.rare_min_count,
         seed=args.seed,
     )
-    out_df, process_stats = rebalance_dataframe(work_df, args.label_col, args.crisis_col, cfg)
-    after_stats = _count_distribution(out_df, args.label_col, args.crisis_col)
+    out_df, process_stats = rebalance_dataframe(work_df, label_col, args.crisis_col, cfg)
+
+    # 可选：压制过大的非中性多数类（如 enriched 中的恐惧）
+    if args.majority_max_count and args.majority_max_count > 0:
+        parts = []
+        maj_stats = {}
+        for lab, sub in out_df.groupby(out_df[label_col].astype(int)):
+            if int(lab) == cfg.neutral_label:
+                parts.append(sub)
+                continue
+            if len(sub) > args.majority_max_count:
+                kept = sub.sample(n=args.majority_max_count, replace=False, random_state=cfg.seed)
+                maj_stats[str(lab)] = {"before": int(len(sub)), "after": int(len(kept))}
+                parts.append(kept)
+            else:
+                parts.append(sub)
+        out_df = pd.concat(parts, axis=0, ignore_index=True)
+        out_df = out_df.sample(frac=1.0, random_state=cfg.seed).reset_index(drop=True)
+        process_stats["majority_downsample"] = maj_stats
+
+    after_stats = _count_distribution(out_df, label_col, args.crisis_col)
 
     os.makedirs(os.path.dirname(args.output_csv) or ".", exist_ok=True)
     out_df.to_csv(args.output_csv, index=False, encoding="utf-8-sig")
@@ -155,11 +228,14 @@ def main() -> None:
         "input_csv": args.input_csv,
         "output_csv": args.output_csv,
         "config": {
-            "label_col": args.label_col,
+            "label_col": label_col,
             "crisis_col": args.crisis_col,
             "neutral_label": args.neutral_label,
             "neutral_keep_ratio": args.neutral_keep_ratio,
             "crisis_upsample_factor": args.crisis_upsample_factor,
+            "rare_labels": list(rare_labels),
+            "rare_min_count": args.rare_min_count,
+            "majority_max_count": args.majority_max_count,
             "seed": args.seed,
         },
         "before": before_stats,
