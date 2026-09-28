@@ -94,6 +94,9 @@ def _build_graphs_for_batch(
     attention_mask: torch.Tensor,
     history_texts: List[List[str]],
     device: torch.device,
+    history_roles: Optional[List[List[int]]] = None,
+    current_role_types: Optional[List[int]] = None,
+    use_role_graph: bool = False,
 ):
     """为有历史的样本构图；无历史返回 None 占位。"""
     graphs = []
@@ -118,7 +121,22 @@ def _build_graphs_for_batch(
         with torch.set_grad_enabled(model.training):
             hist_feat = model.cpeb_model.encode_text(enc["input_ids"], enc["attention_mask"])
         feats = torch.cat([hist_feat, cur_feat[i : i + 1]], dim=0)
-        graph = create_dialogue_graph(turns, feats.detach() if not model.training else feats)
+        node_type_ids = None
+        if use_role_graph:
+            hist_r = (history_roles[i] if history_roles else []) or []
+            # 与 hist 对齐长度
+            if len(hist_r) < len(hist):
+                hist_r = list(hist_r) + [0] * (len(hist) - len(hist_r))
+            hist_r = list(hist_r)[: len(hist)]
+            cur_t = 0
+            if current_role_types is not None and i < len(current_role_types):
+                cur_t = int(current_role_types[i])
+            node_type_ids = hist_r + [cur_t]
+        graph = create_dialogue_graph(
+            turns,
+            feats.detach() if not model.training else feats,
+            node_type_ids=node_type_ids,
+        )
         graphs.append(graph)
     return graphs
 
@@ -146,6 +164,12 @@ def _encode_support(
     return feats, labs_t
 
 
+def _weighted_mean(per_sample: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    """对 [B] 或可 reduce 到 [B] 的损失做样本加权平均。"""
+    w = weights / weights.sum().clamp_min(1e-6)
+    return (per_sample * w).sum()
+
+
 def train_one_epoch(
     model,
     loader,
@@ -156,6 +180,8 @@ def train_one_epoch(
     class_weights: Optional[torch.Tensor],
     grad_clip: float,
     log_interval: int,
+    use_role_graph: bool = False,
+    use_sample_weight: bool = False,
 ) -> Dict[str, float]:
     model.train()
     total = 0.0
@@ -166,9 +192,21 @@ def train_one_epoch(
         user_ids = batch["user_ids"].to(device)
         labels = batch["label_id"].to(device)
         crisis = batch["is_crisis"].to(device)
+        sample_w = batch.get("sample_weight")
+        if sample_w is not None:
+            sample_w = sample_w.to(device)
+        else:
+            sample_w = torch.ones(labels.size(0), device=device)
 
         graphs = _build_graphs_for_batch(
-            model, input_ids, attention_mask, batch["history_texts"], device
+            model,
+            input_ids,
+            attention_mask,
+            batch["history_texts"],
+            device,
+            history_roles=batch.get("history_roles"),
+            current_role_types=batch.get("current_role_types"),
+            use_role_graph=use_role_graph,
         )
         support_feat, support_lab = None, None
         if "support_input_ids" in batch:
@@ -190,11 +228,17 @@ def train_one_epoch(
             return_intermediate=True,
         )
 
-        # class-weighted emotion CE 覆盖
-        if class_weights is not None:
-            emo_loss = F.cross_entropy(outputs["fusion_logits"], labels, weight=class_weights)
-        else:
-            emo_loss = None
+        # per-sample emotion / crisis，再按 sample_weight 聚合
+        emo_per = F.cross_entropy(
+            outputs["fusion_logits"],
+            labels,
+            weight=class_weights,
+            reduction="none",
+        )
+        crisis_logits = outputs["crisis_logits"].view(-1)
+        crisis_per = F.binary_cross_entropy_with_logits(
+            crisis_logits, crisis.view(-1), reduction="none"
+        )
 
         losses = criterion(
             outputs,
@@ -205,13 +249,20 @@ def train_one_epoch(
             compute_meta=False,
             compute_graph=False,
         )
-        if emo_loss is not None:
-            losses["emotion"] = emo_loss
-            losses["total"] = (
-                criterion.loss_weights.get("emotion", 1.0) * emo_loss
-                + criterion.loss_weights.get("crisis", 0.5) * losses["crisis"]
-                + criterion.loss_weights.get("causal", 0.5) * losses["causal"]
-            )
+        if use_sample_weight:
+            emo_loss = _weighted_mean(emo_per, sample_w)
+            crisis_loss = _weighted_mean(crisis_per, sample_w)
+        else:
+            emo_loss = emo_per.mean()
+            crisis_loss = crisis_per.mean()
+
+        losses["emotion"] = emo_loss
+        losses["crisis"] = crisis_loss
+        losses["total"] = (
+            criterion.loss_weights.get("emotion", 1.0) * emo_loss
+            + criterion.loss_weights.get("crisis", 0.5) * crisis_loss
+            + criterion.loss_weights.get("causal", 0.5) * losses["causal"]
+        )
 
         optimizer.zero_grad()
         losses["total"].backward()
@@ -234,7 +285,7 @@ def train_one_epoch(
 
 
 @torch.no_grad()
-def evaluate(model, loader, device) -> Dict[str, Any]:
+def evaluate(model, loader, device, use_role_graph: bool = False) -> Dict[str, Any]:
     model.eval()
     y_true, y_pred = [], []
     y_crisis, y_score = [], []
@@ -246,7 +297,14 @@ def evaluate(model, loader, device) -> Dict[str, Any]:
         crisis = batch["is_crisis"].cpu().numpy()
 
         graphs = _build_graphs_for_batch(
-            model, input_ids, attention_mask, batch["history_texts"], device
+            model,
+            input_ids,
+            attention_mask,
+            batch["history_texts"],
+            device,
+            history_roles=batch.get("history_roles"),
+            current_role_types=batch.get("current_role_types"),
+            use_role_graph=use_role_graph,
         )
         outputs = model(
             input_ids=input_ids,
@@ -292,7 +350,22 @@ def main():
     p.add_argument("--freeze-bert-layers", type=int, default=None)
     p.add_argument("--output-dir", default="models")
     p.add_argument("--result-dir", default="results")
+    p.add_argument(
+        "--specialty",
+        action="store_true",
+        help="学生/咨询特色：client-only + 域加权 + score 加权 + role 构图",
+    )
+    p.add_argument("--client-only", action="store_true", help="划分前丢弃 counselor 轮")
+    p.add_argument("--domain-weight", action="store_true", help="按 source_file 域加权")
+    p.add_argument("--score-weight", action="store_true", help="按 score/危机 样本加权")
+    p.add_argument("--role-graph", action="store_true", help="THEGN 使用 client/counselor 节点类型")
     args = p.parse_args()
+
+    if args.specialty:
+        args.client_only = True
+        args.domain_weight = True
+        args.score_weight = True
+        args.role_graph = True
 
     cfg = get_default_config()
     cfg.device = args.device
@@ -311,12 +384,26 @@ def main():
         args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu"
     )
     print(f"device={device}")
+    specialty_cfg = {
+        "specialty": bool(args.specialty),
+        "client_only": bool(args.client_only),
+        "domain_weight": bool(args.domain_weight),
+        "score_weight": bool(args.score_weight),
+        "role_graph": bool(args.role_graph),
+    }
+    print("specialty_cfg:", json.dumps(specialty_cfg, ensure_ascii=False))
 
     csv_path = args.csv
     if not os.path.isabs(csv_path):
         csv_path = os.path.abspath(os.path.join(ROOT, csv_path))
 
-    bundles = load_and_split_csv(csv_path, seed=cfg.seed)
+    bundles = load_and_split_csv(
+        csv_path,
+        seed=cfg.seed,
+        client_only=args.client_only,
+        use_domain_weight=args.domain_weight,
+        use_score_weight=args.score_weight,
+    )
     print("split meta:", json.dumps(bundles.meta, ensure_ascii=False, indent=2))
 
     train_df = bundles.train_df
@@ -335,6 +422,7 @@ def main():
         max_history_turns=cfg.training.max_history_turns,
         num_support=cfg.training.num_support,
         seed=cfg.seed,
+        use_role_graph=args.role_graph,
     )
     val_ds = EmotionCrisisDataset(
         bundles.val_df,
@@ -344,6 +432,7 @@ def main():
         max_history_turns=cfg.training.max_history_turns,
         num_support=0,
         seed=cfg.seed + 1,
+        use_role_graph=args.role_graph,
     )
     test_ds = EmotionCrisisDataset(
         bundles.test_df,
@@ -353,6 +442,7 @@ def main():
         max_history_turns=cfg.training.max_history_turns,
         num_support=0,
         seed=cfg.seed + 2,
+        use_role_graph=args.role_graph,
     )
 
     train_loader = DataLoader(
@@ -440,6 +530,7 @@ def main():
     best_macro = -1.0
     best_path = out_dir / "unified_emotion_model.pt"
     history = []
+    use_sample_weight = bool(args.domain_weight or args.score_weight)
 
     for epoch in range(1, cfg.training.num_epochs + 1):
         t0 = time.time()
@@ -454,8 +545,10 @@ def main():
             class_weights,
             cfg.training.grad_clip,
             cfg.training.log_interval,
+            use_role_graph=args.role_graph,
+            use_sample_weight=use_sample_weight,
         )
-        val = evaluate(model, val_loader, device)
+        val = evaluate(model, val_loader, device, use_role_graph=args.role_graph)
         cal = ThresholdCalibrator(strategy=cfg.model.threshold_strategy, target_recall=cfg.model.target_recall)
         cal_res = cal.fit(val["y_crisis"], val["y_score"])
         crisis_val = compute_crisis_detection_metrics(
@@ -485,6 +578,7 @@ def main():
                         "bert_model": cfg.model.bert_model,
                         "meta_adapter_type": cfg.model.meta_learning_algorithm,
                         "seed": cfg.seed,
+                        "specialty": specialty_cfg,
                     },
                     "val_macro_f1": macro,
                     "crisis_threshold": cal.threshold,
@@ -501,7 +595,7 @@ def main():
     ckpt = torch.load(best_path, map_location=device)
     model.load_state_dict(ckpt["state_dict"], strict=False)
     thr = float(ckpt.get("crisis_threshold", 0.5))
-    test = evaluate(model, test_loader, device)
+    test = evaluate(model, test_loader, device, use_role_graph=args.role_graph)
     crisis_test = compute_crisis_detection_metrics(test["y_crisis"], test["y_score"], threshold=thr)
     print("\n===== TEST =====")
     print("emotion:", test["emotion"])
@@ -510,6 +604,7 @@ def main():
 
     run_report = {
         "csv": csv_path,
+        "specialty": specialty_cfg,
         "split_meta": bundles.meta,
         "history": history,
         "best_val_macro_f1": best_macro,

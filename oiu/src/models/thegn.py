@@ -402,7 +402,8 @@ class THEGNModel(nn.Module):
 def create_dialogue_graph(
     dialogue_history: List[str],
     text_features: torch.Tensor,
-    temporal_decay: float = 0.1
+    temporal_decay: float = 0.1,
+    node_type_ids: Optional[List[int]] = None,
 ) -> HeteroGraph:
     """
     从对话历史创建异构图
@@ -411,6 +412,8 @@ def create_dialogue_graph(
         dialogue_history: 对话历史
         text_features: 文本特征 [num_turns, feature_dim]
         temporal_decay: 时间衰减参数
+        node_type_ids: 可选节点类型（0=client，1=counselor，2=emotion）；
+            缺省时全部为 0，保持旧行为
         
     Returns:
         异构图
@@ -435,8 +438,14 @@ def create_dialogue_graph(
     # 节点特征（所有对话轮次）
     node_features = text_features
     
-    # 节点类型（这里简化：都是user类型，实际应区分user和bot）
-    node_types = torch.zeros(num_turns, dtype=torch.long)
+    # 节点类型：显式传入时区分 client/counselor；否则全 0（兼容基线）
+    if node_type_ids is not None and len(node_type_ids) == num_turns:
+        node_types = torch.tensor(
+            [int(max(0, min(2, t))) for t in node_type_ids],
+            dtype=torch.long,
+        )
+    else:
+        node_types = torch.zeros(num_turns, dtype=torch.long)
     
     # 节点时间戳
     node_times = torch.arange(num_turns, dtype=torch.long)

@@ -73,6 +73,13 @@ class LightweightEmotionFilter:
             r'不(想|愿意|要)\s*(活|继续|坚持)': 3.0,
             r'(完全|彻底|真的)\s*(绝望|崩溃|失望)': 2.5,
         }
+
+        # 校园主题词典（学生场景先验）
+        try:
+            from .student_lexicon import match_student_lexicon
+            self._match_student_lexicon = match_student_lexicon
+        except Exception:
+            self._match_student_lexicon = None
     
     def check_extreme_keywords(self, text: str) -> Tuple[bool, str, float]:
         """
@@ -182,6 +189,14 @@ class LightweightEmotionFilter:
         
         # Step 2: 模式匹配
         pattern_score = self.calculate_pattern_score(text)
+
+        # Step 2b: 校园/学生主题词典加分
+        student_bonus = 0.0
+        student_themes: List[str] = []
+        if self._match_student_lexicon is not None:
+            hit = self._match_student_lexicon(text)
+            student_bonus = float(hit.risk_bonus)
+            student_themes = list(hit.themes)
         
         # Step 3: BERT评分 — 未微调头仅作弱参考，权重压低
         if not has_extreme or level != 'critical':
@@ -191,13 +206,14 @@ class LightweightEmotionFilter:
         else:
             bert_score = 10.0  # 危机级别直接给满分
         
-        # 综合评分：关键词优先，避免未训练 BERT 主导
-        final_score = max(keyword_score, pattern_score + 0.5 * bert_score)
+        # 综合评分：关键词优先，避免未训练 BERT 主导；校园主题提高送深倾向
+        final_score = max(keyword_score, pattern_score + 0.5 * bert_score + student_bonus)
         final_score = min(final_score, 10.0)
         
         need_deep_analysis = (
             final_score >= thr or 
-            level in ['critical', 'severe']
+            level in ['critical', 'severe'] or
+            (student_bonus >= 2.0 and final_score >= max(thr - 1.0, 0.0))
         )
         
         latency = (time.time() - start_time) * 1000  # ms
@@ -214,6 +230,8 @@ class LightweightEmotionFilter:
                 'keyword_score': keyword_score,
                 'pattern_score': pattern_score,
                 'bert_score': bert_score,
+                'student_theme_bonus': student_bonus,
+                'student_themes': student_themes,
                 'deep_threshold': thr,
             }
         }

@@ -384,7 +384,8 @@ class UnifiedEmotionModel(nn.Module):
         text: str,
         user_id: int,
         conversation_history: Optional[List[str]] = None,
-        support_examples: Optional[List[Tuple[str, int]]] = None
+        support_examples: Optional[List[Tuple[str, int]]] = None,
+        conversation_role_types: Optional[List[int]] = None,
     ) -> Dict:
         """
         预测单个文本的情绪
@@ -394,6 +395,8 @@ class UnifiedEmotionModel(nn.Module):
             user_id: 用户ID
             conversation_history: 对话历史
             support_examples: 支持集样例 [(text, label), ...]
+            conversation_role_types: 与 history+[text] 等长的节点类型
+                （0=client，1=counselor）；缺省则全 0
             
         Returns:
             预测结果字典
@@ -461,10 +464,15 @@ class UnifiedEmotionModel(nn.Module):
                 history_mask = history_inputs['attention_mask'].to(self.device)
                 history_features = self.cpeb_model.encode_text(history_ids, history_mask)
             
+            turns = conversation_history + [text]
+            node_type_ids = None
+            if conversation_role_types is not None and len(conversation_role_types) == len(turns):
+                node_type_ids = list(conversation_role_types)
             # 创建图
             graph = create_dialogue_graph(
-                conversation_history + [text],
-                history_features
+                turns,
+                history_features,
+                node_type_ids=node_type_ids,
             )
             conversation_graphs = [graph]
         

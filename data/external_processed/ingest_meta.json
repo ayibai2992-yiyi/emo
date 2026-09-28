@@ -1,0 +1,13 @@
+{
+  "cpcd_turns": 45087,
+  "slang_turns": 1766,
+  "campus_turns": 5189,
+  "enriched": 20000,
+  "cpcd_students_requested": 25,
+  "sources": {
+    "CPCD": "https://huggingface.co/datasets/EdwinUstb/CPCD (Psy-Chronicle, 2026)",
+    "meme_md": "D:\\项目\\情感检测\\数据\\data\\raw\\梗数据集（思考怎么处理中）.md",
+    "local_campus": "D:\\项目\\情感检测\\数据\\data\\light_deal\\train\\时序性对话"
+  },
+  "note": "CPCD 轮次情绪为弱标注(domain/stress/词典)；论文主表请与人工抽检结合。"
+}

@@ -13,6 +13,9 @@ env/
 data_all/
 tmp_data/
 temp/
+data/external_raw/
+# 全量 CPCD 轮次 CSV 太大，云端训练用 enriched 即可；需全量时本机生成
+data/external_processed/cpcd_student_ai_turns.csv
 *.zip
 *.rar
 *.7z

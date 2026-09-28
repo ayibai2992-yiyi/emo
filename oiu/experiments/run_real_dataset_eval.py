@@ -109,7 +109,7 @@ def run_eval(args: argparse.Namespace) -> Dict:
 
     user_col = _pick_col(df, args.user_col, ["user_id", "uid", "user", "userid"])
     text_col = _pick_col(df, args.text_col, ["text", "content", "sentence", "utterance"])
-    label_col = _pick_col(df, args.label_col, ["label", "emotion_id", "emotion_label", "y"])
+    label_col = _pick_col(df, args.label_col, ["label", "label_id", "emotion_id", "emotion_label", "y"])
     crisis_col = _pick_col(
         df,
         args.crisis_col,
@@ -128,8 +128,21 @@ def run_eval(args: argparse.Namespace) -> Dict:
                 history_col = c
                 break
 
+    role_col = "role" if "role" in df.columns else ""
+    source_col = "source_file" if "source_file" in df.columns else ""
+
+    extra_cols = []
+    if crisis_col:
+        extra_cols.append(crisis_col)
+    if history_col:
+        extra_cols.append(history_col)
+    if role_col:
+        extra_cols.append(role_col)
+    if source_col:
+        extra_cols.append(source_col)
+
     # 基础清洗
-    data = df[[user_col, text_col, label_col] + ([crisis_col] if crisis_col else []) + ([history_col] if history_col else [])].copy()
+    data = df[[user_col, text_col, label_col] + extra_cols].copy()
     data = data.dropna(subset=[user_col, text_col, label_col])
     data[user_col] = data[user_col].astype(str)
     data[text_col] = data[text_col].astype(str)
@@ -207,6 +220,8 @@ def run_eval(args: argparse.Namespace) -> Dict:
                 "label_col": label_col,
                 "crisis_col": crisis_col or None,
                 "history_col": history_col or None,
+                "role_col": role_col or None,
+                "source_col": source_col or None,
             },
         },
         "protocol": {
@@ -230,6 +245,32 @@ def run_eval(args: argparse.Namespace) -> Dict:
         "test_metrics_emotion": emo_test,
         "test_metrics_crisis": crisis_test,
     }
+
+    if args.client_only_metrics:
+        subsets: Dict[str, np.ndarray] = {}
+        if role_col:
+            roles = data[role_col].astype(str).str.strip().str.lower().to_numpy()
+            subsets["subset_client"] = test_m & (roles == "client")
+        if source_col:
+            sources = data[source_col].astype(str).str.lower().to_numpy()
+            subsets["subset_student_source"] = test_m & np.array(
+                ["student" in s for s in sources], dtype=bool
+            )
+        subset_metrics: Dict[str, Dict] = {}
+        for name, mask in subsets.items():
+            n = int(mask.sum())
+            if n == 0:
+                subset_metrics[name] = {"n": 0, "note": "empty_subset"}
+                continue
+            subset_metrics[name] = {
+                "n": n,
+                "emotion": compute_emotion_metrics(y_true_all[mask], y_pred[mask]),
+                "crisis": compute_crisis_detection_metrics(
+                    y_crisis[mask], y_score_crisis[mask], threshold=test_threshold
+                ),
+                "note": "appendix_only" if name == "subset_student_source" else "primary_subset",
+            }
+        out["subset_metrics"] = subset_metrics
 
     if args.output_json:
         os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
@@ -259,6 +300,11 @@ def build_argparser() -> argparse.ArgumentParser:
         "--force-deep",
         action="store_true",
         help="跳过第一层，强制全部样本走 UnifiedEmotionModel（论文主表推荐）",
+    )
+    p.add_argument(
+        "--client-only-metrics",
+        action="store_true",
+        help="额外报告 test 上 client / student_source 子集指标",
     )
     p.add_argument(
         "--output-json",
