@@ -163,7 +163,11 @@ def run_eval(args: argparse.Namespace) -> Dict:
         seed=proto.seed,
     )
 
-    pipeline = MonitoringPipeline(device=args.device, force_deep=args.force_deep)
+    pipeline = MonitoringPipeline(
+        device=args.device,
+        force_deep=args.force_deep,
+        model_dir=args.model_dir or None,
+    )
 
     y_pred = np.zeros(len(data), dtype=int)
     y_score_crisis = np.zeros(len(data), dtype=float)
@@ -300,6 +304,11 @@ def build_argparser() -> argparse.ArgumentParser:
         "--force-deep",
         action="store_true",
         help="跳过第一层，强制全部样本走 UnifiedEmotionModel（论文主表推荐）",
+    )
+    p.add_argument(
+        "--model-dir",
+        default="",
+        help="权重目录（含 unified_emotion_model.pt）；跨域评测时指向 specialty 目录，--csv 指向原 20k",
     )
     p.add_argument(
         "--client-only-metrics",

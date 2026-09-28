@@ -182,63 +182,109 @@ python experiments/run_baseline_comparison.py \
 | 目录隔离 | specialty 未覆盖 `models_baseline_20k_orig` |
 | 论文表述 | 写明弱标、危机=绝望操作化、重平衡协议 |
 
-参考线（来自项目既有结果，非本次绝对门槛）：旧 three_layer Macro-F1≈0.16；single_deep≈0.42；B0 验证已明显高于前者。
+参考线（来自项目既有结果，非本次绝对门槛）：旧 three_layer Macro-F1≈0.16；single_deep（冻结）≈0.42；B0 验证已明显高于前者。公平强基线请用 **bert_finetune**。
+
+---
+
+## 5b. EI 投稿：必做 / 选做（已落地代码）
+
+### 必做
+
+| 项 | 说明 | 状态 |
+|----|------|------|
+| B0 备份 + 测试集每类 F1 | `models_baseline_20k_orig/` | 云端操作 |
+| B1 重平衡训评 | `upload_ready_20k_rebalanced.csv` | 数据集已生成 |
+| S1r 特色训评 | enriched_rebalanced + `--specialty` | 数据集已生成 |
+| 强基线 bert_finetune | 与主模型同一用户划分 | **代码已加** |
+| 模块消融 | `run_ablation_suite.py` | 已有 |
+| 弱标人工抽检 | `weak_label_audit_sample.csv`（320 条） | **表已生成，待填写** |
+| 跨域评测 | S1r 权重 × 原 20k `--model-dir` | **代码已加** |
+
+**强基线：**
+
+```bash
+python experiments/run_baseline_comparison.py \
+  --csv ../data/experiment_sets/upload_ready_20k_rebalanced.csv \
+  --device cuda --run-bert-finetune --finetune-epochs 3 \
+  --output-json results/baseline_B1_with_finetune.json
+# 可选第二编码器：
+#   --run-roberta-finetune --roberta-model hfl/chinese-roberta-wwm-ext
+```
+
+**弱标抽检：**
+
+```bash
+# 填写 data/experiment_sets/weak_label_audit_sample.csv 中 human_* 列后：
+python experiments/score_weak_label_audit.py \
+  --audit-csv ../data/experiment_sets/weak_label_audit_filled.csv \
+  --output-json results/weak_label_audit_score.json
+```
+
+**跨域（S1r → 原 20k）：**
+
+```bash
+python experiments/run_real_dataset_eval.py \
+  --csv ../data/experiment_sets/upload_ready_20k_original.csv \
+  --model-dir models/specialty_enriched_rebal \
+  --device cuda --force-deep --client-only-metrics \
+  --output-json results/cross_domain_S1r_on_B0.json
+```
+
+### 选做
+
+| 项 | 命令 |
+|----|------|
+| 多 seed 均值±方差 | `python experiments/run_multi_seed_train.py --seeds 42,43,44 ...` |
+| RoBERTa 第二强基线 | `--run-roberta-finetune` |
+| S0/S1 完整对照 | 见 §4.3 |
+| Web 演示 | `emotion_web.py` |
 
 ---
 
 ## 6. 建议日程
 
 ```text
-Day0（今日）  备份 B0；整理测试集每类 F1；确认 experiment_sets 已在云端
-Day1          训 B1 + 评测
-Day1–2        训 S1r + 评测（主攻）
-Day2          可选 S0/S1；消融；写表
-Day3+         Web 接入（可选）
+Day0  备份 B0；确认 experiment_sets；并行填弱标抽检
+Day1  训 B1 + bert_finetune 基线
+Day1–2  训 S1r + 评测 + 跨域
+Day2  消融；多 seed（赶时间可只 seed=42 并声明）
+Day3+ 可选 RoBERTa / Web
 ```
 
-**最小论文路径**：B0（完成）+ B1 + S1r + 一组模块消融。
+**最小 EI 路径**：B0 + B1 + S1r + bert_finetune + 消融 + 弱标一致率 + 局限段。
 
 ---
 
 ## 7. 论文表格建议
 
-**表 A — 方法主结果（原域/重平衡）**
+**表 A**：B0、B1、traditional、single_deep、**bert_finetune**、three_layer — Macro-F1 / 危机指标  
 
-- 行：B0、B1、（可选）traditional / single_deep / three_layer  
-- 列：Macro-F1、各类 F1（或附录）、危机 PR-AUC / Recall / FPR  
+**表 B**：S0、S1、S1r — 整体 + subset_client  
 
-**表 B — 学生场景**
+**表 C**：模块消融 + specialty 开关消融  
 
-- 行：S0、S1、S1r  
-- 列：整体 Macro-F1、subset_client Macro-F1、危机指标  
+**表 D（附录）**：弱标 vs 人工一致率  
 
-**表 C — 消融**
-
-- 行：full / no_cpeb / no_mea / no_thegn；（算法开关）client-only / domain-weight / role-graph  
-
-**局限段**：数据失衡与重采样、CPCD 弱标、危机操作化为绝望、热语为模板生成。
+**局限**：重采样、CPCD 弱标、危机=绝望操作化、热语模板、种子策略。
 
 ---
 
 ## 8. 同步到云端
 
-本机生成后，将 `data/experiment_sets/` 与更新后的本文件纳入 `cloud-minimal` 再 `git pull`，例如：
-
 ```bash
-# 本机（在仓库根，cloud-minimal 分支）
-git add data/experiment_sets oiu/docs/EXPERIMENT_PLAN.md oiu/experiments/rebalance_dataset.py
-git commit -m "Add rebalanced experiment sets and experiment plan"
+git add data/experiment_sets oiu/docs/EXPERIMENT_PLAN.md \
+  oiu/experiments/*.py oiu/src/service/monitoring_pipeline.py
+git commit -m "EI hardening: finetune baseline, multiseed, weak-label audit, cross-domain"
 git push origin cloud-minimal
-
-# AutoDL
-cd /root/emo && git pull origin cloud-minimal
-ls -lh data/experiment_sets/
+# AutoDL: cd /root/emo && git pull origin cloud-minimal
 ```
 
 ---
 
-## 9. 相关文档
+## 9. 相关文档与新脚本
 
-- `data/experiment_sets/README.md` — 数据集字段与复现命令  
-- `data/external_processed/README.md` — 学生 enriched 来源说明  
-- `oiu/docs/P0_RUNBOOK.md` — 训练/评测基础命令  
+- `data/experiment_sets/README.md` / `weak_label_audit_*.csv|json`
+- `oiu/experiments/run_multi_seed_train.py`
+- `oiu/experiments/sample_weak_label_audit.py` / `score_weak_label_audit.py`
+- `oiu/experiments/run_baseline_comparison.py`（含 bert_finetune）
+- `oiu/docs/P0_RUNBOOK.md`

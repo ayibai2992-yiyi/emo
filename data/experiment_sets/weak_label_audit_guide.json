@@ -1,0 +1,23 @@
+{
+  "purpose": "核对弱标注与人工判断一致性，供论文局限/附录使用",
+  "label_legend": {
+    "0": "中性",
+    "1": "高兴",
+    "2": "惊讶",
+    "3": "悲伤",
+    "4": "愤怒",
+    "5": "恐惧",
+    "6": "厌恶",
+    "7": "绝望"
+  },
+  "instructions": [
+    "仅根据 text（可参考 history）判断求助者当前情绪，不要被咨询师安慰语带偏",
+    "human_label_id 填 0-7；拿不准填最接近类并在 human_note 写不确定",
+    "危机：明确自伤/自杀意图或极度绝望无力感标 1，否则 0",
+    "完成后运行: python experiments/score_weak_label_audit.py --audit-csv <填好的表>"
+  ],
+  "sample_size": 320,
+  "n_per_label_target": 40,
+  "source_csv": "../data/experiment_sets/upload_ready_student_enriched_rebalanced.csv",
+  "agreement_formula": "accuracy = mean(human_label_id == model_label_id); crisis_f1 另算"
+}

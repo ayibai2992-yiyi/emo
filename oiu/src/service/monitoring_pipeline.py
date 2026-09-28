@@ -48,8 +48,12 @@ class MonitoringPipeline:
         device: Optional[str] = None,
         allow_heuristic: bool = False,
         force_deep: bool = False,
+        model_dir: Optional[str] = None,
     ):
         cfg = get_default_config()
+        if model_dir:
+            cfg.model_dir = model_dir
+        self.model_dir = cfg.model_dir
         self.device = device or cfg.device
         self.force_deep = force_deep
         try:

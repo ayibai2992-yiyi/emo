@@ -12,6 +12,8 @@
 | `upload_ready_student_enriched.csv` | **S0/S1** 学生增强 | 20000 | CPCD+热语+校园+原 client |
 | `upload_ready_student_enriched_rebalanced.csv` | **S1r** 推荐主训 | ~14245 | enriched 再平衡（恐惧↓、稀有↑） |
 | `upload_ready_student_enriched_client_only.csv` | 辅助 | ~19430 | enriched 去 counselor |
+| `weak_label_audit_sample.csv` | EI 弱标人工抽检 | 320 | 每类约 40 条，待填 human_* |
+| `weak_label_audit_guide.json` | 抽检说明 | — | 标注规范 |
 | `*_rebalance_stats.json` | 重平衡前后统计 | — | 论文附录可引用 |
 
 ## 标签约定
