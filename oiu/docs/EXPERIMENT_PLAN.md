@@ -1,8 +1,118 @@
 # 后续实验计划（配比修正 × 学生特色）
 
-> 版本：2026-09-28  
+> 版本：2026-10-02  
 > 前提：原 `upload_ready_20k` 全量 3 epoch 训练已完成（B0）。  
-> 数据目录：`data/experiment_sets/`（本计划所需 CSV 已生成）。
+> 数据目录：`data/experiment_sets/`（本计划所需 CSV 已生成）。  
+> 代码分支：`cloud-minimal`（含 `--specialty`、bert_finetune、跨域 `--model-dir`、弱标抽检脚本）。
+
+---
+
+## 0. 下一步执行清单（2026-10-02 起立刻执行）
+
+**当前进度**：B0 已训完；数据集与 EI 代码已就绪。按下面顺序在 **AutoDL GPU**（`/root/emo/oiu`）执行。  
+**最小 EI 闭环**：B0（已有）+ B1 + S1r + bert_finetune + 消融 + 弱标一致率。
+
+### 0.1 同步代码 + 备份 B0（约 5 分钟，必做）
+
+```bash
+cd /root/emo && git pull origin cloud-minimal
+cd oiu
+mkdir -p models_baseline_20k_orig results/baseline_orig
+cp -r models/* models_baseline_20k_orig/ 2>/dev/null || true
+cp results/train_run_*.json results/baseline_orig/ 2>/dev/null || true
+ls ../data/experiment_sets/*.csv | head
+```
+
+确认存在：`upload_ready_20k_rebalanced.csv`、`upload_ready_student_enriched_rebalanced.csv`。
+
+### 0.2 Day1 — 训评 B1（配比修正，约 1.5–3 h）
+
+```bash
+python experiments/train_unified_model.py \
+  --csv ../data/experiment_sets/upload_ready_20k_rebalanced.csv \
+  --epochs 3 --batch-size 8 --device cuda --freeze-bert-layers 10 \
+  --output-dir models/baseline_rebalanced \
+  --result-dir results
+```
+
+```bash
+python experiments/run_real_dataset_eval.py \
+  --csv ../data/experiment_sets/upload_ready_20k_rebalanced.csv \
+  --model-dir models/baseline_rebalanced \
+  --device cuda --force-deep --client-only-metrics \
+  --output-json results/real_eval_B1_rebalanced.json
+```
+
+验收：稀有类 F1 相对 B0 改善或更稳；Macro 不明显崩。
+
+### 0.3 Day1 — 强基线 bert_finetune（B1 同数据，约 1–2 h）
+
+B1 结束后立刻串行跑：
+
+```bash
+python experiments/run_baseline_comparison.py \
+  --csv ../data/experiment_sets/upload_ready_20k_rebalanced.csv \
+  --device cuda --run-bert-finetune --finetune-epochs 3 \
+  --output-json results/baseline_B1_with_finetune.json
+```
+
+### 0.4 Day1–2 — 训评 S1r + 跨域（约 2–4 h）
+
+```bash
+python experiments/train_unified_model.py \
+  --csv ../data/experiment_sets/upload_ready_student_enriched_rebalanced.csv \
+  --epochs 3 --batch-size 8 --device cuda --freeze-bert-layers 10 \
+  --specialty \
+  --output-dir models/specialty_enriched_rebal \
+  --result-dir results
+```
+
+```bash
+python experiments/run_real_dataset_eval.py \
+  --csv ../data/experiment_sets/upload_ready_student_enriched_rebalanced.csv \
+  --model-dir models/specialty_enriched_rebal \
+  --device cuda --force-deep --client-only-metrics \
+  --output-json results/real_eval_S1r.json
+```
+
+跨域（S1r 权重 → 原 20k）：
+
+```bash
+python experiments/run_real_dataset_eval.py \
+  --csv ../data/experiment_sets/upload_ready_20k_original.csv \
+  --model-dir models/specialty_enriched_rebal \
+  --device cuda --force-deep --client-only-metrics \
+  --output-json results/cross_domain_S1r_on_B0.json
+```
+
+### 0.5 Day2 — 消融（在 S1r 权重上）
+
+```bash
+python experiments/run_ablation_suite.py
+```
+
+### 0.6 本机可并行 — 弱标抽检（不占 GPU）
+
+填写 `data/experiment_sets/weak_label_audit_sample.csv` 的 `human_*` 列后：
+
+```bash
+python experiments/score_weak_label_audit.py \
+  --audit-csv ../data/experiment_sets/weak_label_audit_filled.csv \
+  --output-json results/weak_label_audit_score.json
+```
+
+### 0.7 建议日程一览
+
+| 时间 | 任务 | 必要性 |
+|------|------|--------|
+| 现在 | §0.1 同步 + 备份 B0 | 必做 |
+| Day1 | B1 训+评 → bert_finetune | 必做 |
+| Day1–2 | S1r 训+评 + 跨域 | 必做 |
+| Day2 | 消融 | 必做 |
+| 空档 | 本机弱标抽检 | 必做 |
+| 赶时间可砍 | 多 seed、RoBERTa、S0/S1 完整对照、Web | 选做 |
+
+**现在立刻做**：云端 `git pull` → 备份 B0 → 启动 **B1 训练**。B1 跑完核对 `train_run_*.json` 中 Macro-F1 / 稀有类 F1，再开 S1r。
 
 ---
 
@@ -115,6 +225,7 @@ python experiments/train_unified_model.py \
 ```bash
 python experiments/run_real_dataset_eval.py \
   --csv ../data/experiment_sets/upload_ready_20k_rebalanced.csv \
+  --model-dir models/baseline_rebalanced \
   --device cuda --force-deep --client-only-metrics \
   --output-json results/real_eval_B1_rebalanced.json
 ```
@@ -134,6 +245,7 @@ python experiments/train_unified_model.py \
 ```bash
 python experiments/run_real_dataset_eval.py \
   --csv ../data/experiment_sets/upload_ready_student_enriched_rebalanced.csv \
+  --model-dir models/specialty_enriched_rebal \
   --device cuda --force-deep --client-only-metrics \
   --output-json results/real_eval_S1r.json
 ```
@@ -243,6 +355,8 @@ python experiments/run_real_dataset_eval.py \
 
 ## 6. 建议日程
 
+详见 **§0 下一步执行清单**。摘要：
+
 ```text
 Day0  备份 B0；确认 experiment_sets；并行填弱标抽检
 Day1  训 B1 + bert_finetune 基线
@@ -269,14 +383,16 @@ Day3+ 可选 RoBERTa / Web
 
 ---
 
-## 8. 同步到云端
+## 8. 同步到云端 / 服务器拉取
+
+本机推送后，在 AutoDL 执行：
 
 ```bash
-git add data/experiment_sets oiu/docs/EXPERIMENT_PLAN.md \
-  oiu/experiments/*.py oiu/src/service/monitoring_pipeline.py
-git commit -m "EI hardening: finetune baseline, multiseed, weak-label audit, cross-domain"
-git push origin cloud-minimal
-# AutoDL: cd /root/emo && git pull origin cloud-minimal
+cd /root/emo && git pull origin cloud-minimal
+# 仅确认本文件：
+ls -l oiu/docs/EXPERIMENT_PLAN.md
+# 或只拉该文件（已在仓库内时）：
+git checkout origin/cloud-minimal -- oiu/docs/EXPERIMENT_PLAN.md
 ```
 
 ---
