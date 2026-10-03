@@ -1,0 +1,606 @@
+# 基于个性化阈值和元学习的情绪检测算法研究
+
+**Research Question**: 如何在多轮对话中建模个性化的情绪演化模式，并实现少样本快速适应？
+
+**目标**: CCF-A类顶刊/顶会 (ACL/EMNLP/AAAI/TAFFC)
+
+---
+
+## 核心创新点（三大支柱）
+
+### 创新点1: 因果个性化情绪基线建模 (CPEB)
+**Causal Personalized Emotion Baseline**
+
+#### 问题定义
+传统情绪分析假设所有用户共享相同的情绪判定标准，但现实中：
+- 用户A经常说"好烦"，但这是其日常表达习惯（trait）
+- 用户B偶尔说一次"不开心"，可能代表严重的情绪问题（state）
+
+**混淆偏差（Confounding Bias）**：观测到的文本受到"个体表达习惯"和"真实情绪状态"的双重影响。
+
+#### 理论框架
+
+**因果图设计**:
+```
+个人特质 (Z)  →  表达习惯 (H)  →  观测文本 (X)
+     ↓                              ↓
+  真实情绪 (E)  ←───────────────────┘
+```
+
+**结构因果模型 (SCM)**:
+```
+E := f_E(Z, C, ε_E)         # 真实情绪 = f(个人特质, 情境, 噪声)
+H := f_H(Z, ε_H)            # 表达习惯 = f(个人特质, 噪声)
+X := f_X(E, H, ε_X)         # 观测文本 = f(真实情绪, 表达习惯, 噪声)
+```
+
+**反事实推断**:
+我们要回答：如果这句话是在"正常基线状态"下说的，情绪应该是什么？
+
+数学表达：
+```
+E* = E(do(H = baseline_user))
+```
+
+#### 实现方法
+
+**1. 基线估计器 (Baseline Estimator)**
+- 用历史数据估计每个用户的情绪表达基线 θ_user
+- 建模为高斯分布：θ_user ~ N(μ_user, Σ_user)
+- 采用变分推断 (Variational Inference) 学习后验分布
+
+**2. 因果干预模块 (Causal Intervention)**
+- 使用do-calculus进行因果干预
+- 通过前门调整 (Front-door Adjustment) 消除混淆
+- 计算平均因果效应 (ATE): ATE = E[E | do(H=h₁)] - E[E | do(H=h₀)]
+
+**3. 可识别性证明 (Identifiability)**
+证明在以下假设下，真实情绪E可被识别：
+- 假设1: 无未观测混淆因子 (No unobserved confounding)
+- 假设2: 单调性 (Monotonicity): 情绪不会因干预变反向
+- 假设3: 正性 (Positivity): 所有条件概率 > 0
+
+**理论贡献**:
+- 首次将因果推断用于个性化情绪基线建模
+- 提供严格的数学证明框架
+- 可量化因果效应的置信区间
+
+---
+
+### 创新点2: 元学习驱动的快速适应 (MEA)
+**Meta-Emotion Adapter**
+
+#### 问题定义
+**冷启动挑战**: 新用户没有历史数据，如何快速学习其情绪表达模式？
+
+传统方法：
+- Fine-tuning: 需要大量数据（100+样本）
+- Transfer Learning: 泛化性差
+
+我们的方法：
+- 3-5轮对话即可个性化（few-shot learning）
+
+#### 理论框架
+
+**元学习范式**:
+```
+预训练阶段: 在多个用户{U₁, U₂, ..., Uₙ}上学习"如何快速适应"
+元目标: min Σᵢ L_adapt(θ + Δθᵢ, Dᵢ_test)
+        where Δθᵢ = ADAPT(θ, Dᵢ_train)
+
+测试阶段: 新用户U_new只需少量样本{x₁, x₂, ..., xₖ}
+快速适应: θ_new = θ + ADAPT(θ, {x₁, ..., xₖ})
+```
+
+#### 实现方法
+
+**1. MAML-based 元学习器**
+基于Model-Agnostic Meta-Learning框架：
+
+```python
+# 外层循环: 元训练
+for batch_users in meta_train_users:
+    for user in batch_users:
+        # 内层循环: 用户级适应
+        θ_user = θ - α·∇L(θ, D_user_support)
+        meta_loss += L(θ_user, D_user_query)
+    
+    # 元更新
+    θ = θ - β·∇_θ meta_loss
+```
+
+**2. 原型网络 (Prototypical Network)**
+学习用户情绪表达的原型表示：
+
+```
+c_k = 1/|S_k| Σ_{x∈S_k} f_θ(x)    # k类情绪的原型
+
+d(x, c_k) = ||f_θ(x) - c_k||²     # 距离度量
+
+P(y=k|x) = softmax(-d(x, c_k))    # 分类概率
+```
+
+**3. 任务自适应层**
+为每个用户学习轻量级适配器：
+- LoRA (Low-Rank Adaptation): 秩r=8的低秩矩阵
+- Adapter Layers: 瓶颈维度d_bottleneck=64
+- 仅0.5%参数需要用户级微调
+
+#### 理论分析
+
+**泛化误差上界**:
+在k-shot设定下，风险上界为：
+```
+R(θ) ≤ R̂(θ) + O(√(C·k / (n·m)))
+```
+其中：
+- n: 元训练用户数
+- m: 每个用户的支持集大小
+- k: 测试时的shot数
+- C: 复杂度常数
+
+**证明思路**:
+1. 使用PAC-Bayes理论
+2. 引入KL散度正则化
+3. 证明元学习的样本复杂度优于标准学习
+
+**理论贡献**:
+- 证明元学习在情绪领域的样本高效性
+- 分析k-shot性能随k的变化规律
+- 提供理论指导的超参数选择
+
+---
+
+### 创新点3: 时序异构图注意力网络 (THEGN)
+**Temporal Heterogeneous Emotion Graph Network**
+
+#### 问题定义
+对话中的情绪不是孤立的：
+- **时间依赖**: 当前情绪受历史影响
+- **交互影响**: 对方的回复会改变情绪
+- **长期模式**: 情绪有周期性和趋势性
+
+传统序列模型（RNN/LSTM）的局限：
+- 只能捕获线性时间依赖
+- 难以建模长距离情绪传播
+- 缺少结构化的推理能力
+
+#### 理论框架
+
+**异构图定义**:
+```
+G = (V, E, τ, φ)
+
+节点集 V = V_user ∪ V_bot ∪ V_emotion
+  - V_user: 用户消息节点
+  - V_bot: 机器人回复节点  
+  - V_emotion: 隐式情绪状态节点
+
+边集 E = E_temporal ∪ E_reply ∪ E_influence
+  - E_temporal: 时序连接边
+  - E_reply: 对话回复边
+  - E_influence: 情绪影响边
+
+节点类型 τ: V → {user, bot, emotion}
+边类型 φ: E → {temporal, reply, influence}
+```
+
+**时间衰减权重**:
+```
+w(e_{i→j}) = exp(-λ·Δt_{ij}) · attention(h_i, h_j)
+```
+
+#### 实现方法
+
+**1. 图构建器 (Graph Constructor)**
+
+输入：对话序列 {u₁, r₁, u₂, r₂, ..., uₜ}
+输出：动态异构图 G_t
+
+```python
+def construct_graph(dialogue_history):
+    G = HeteroGraph()
+    
+    # 添加用户和机器人节点
+    for i, (user_msg, bot_reply) in enumerate(dialogue_history):
+        u_node = G.add_node(type='user', text=user_msg, time=i)
+        b_node = G.add_node(type='bot', text=bot_reply, time=i)
+        
+        # 对话回复边
+        G.add_edge(u_node, b_node, type='reply')
+        
+        # 时序边（带衰减权重）
+        if i > 0:
+            prev_u = G.get_node(type='user', time=i-1)
+            weight = exp(-lambda * (i - (i-1)))
+            G.add_edge(prev_u, u_node, type='temporal', weight=weight)
+    
+    # 添加隐式情绪节点（可学习）
+    for i in range(len(dialogue_history)):
+        e_node = G.add_node(type='emotion', time=i)
+        # 连接到对应的用户节点
+        G.add_edge(G.get_node(type='user', time=i), e_node, type='influence')
+    
+    return G
+```
+
+**2. 异构图注意力 (Heterogeneous GAT)**
+
+针对不同类型的边使用不同的注意力机制：
+
+```
+h_i^(l+1) = σ( Σ_{τ∈T} Σ_{j∈N_τ(i)} α_τ,ij · W_τ · h_j^(l) )
+
+其中注意力权重:
+α_τ,ij = softmax_j( LeakyReLU(a_τ^T · [W_τ·h_i || W_τ·h_j]) )
+```
+
+关键设计：
+- 为每种边类型τ学习独立的权重矩阵 W_τ
+- 时序边加入时间衰减：α_temporal *= exp(-λΔt)
+- 多头注意力：8个头并行计算
+
+**3. 层级注意力聚合**
+
+**节点级注意力**: 哪些词重要？
+```
+h_msg = Σ_w α_w · embed(w)
+```
+
+**子图级注意力**: 哪些历史对话重要？
+```
+h_history = Σ_t β_t · h_msg^(t)
+```
+
+**全局注意力**: 长期 vs 短期？
+```
+h_final = γ_short·h_recent + γ_long·h_longterm
+```
+
+#### 表达能力证明
+
+**定理**: THEGN的表达能力严格强于LSTM/GRU
+
+**证明思路**:
+1. 图网络可以模拟任意递归网络（通过消息传递）
+2. 异构结构增加了额外的归纳偏置
+3. 注意力机制可以学习动态的时间依赖
+
+**复杂度分析**:
+- 时间复杂度: O(|E|·d²) 其中d是隐藏维度
+- 空间复杂度: O(|V|·d + |E|)
+- 可通过采样优化到 O(k·|V|·d²) 其中k是邻居采样数
+
+**理论贡献**:
+- 首次将异构图用于对话情绪建模
+- 证明图结构的优越性
+- 提供高效的实现算法
+
+---
+
+## 三大模块的整合
+
+### 整体架构
+
+```
+输入: 用户对话历史 {(u₁,t₁), (u₂,t₂), ..., (uₜ,tₜ)}
+
+┌─────────────────────────────────────────────────────┐
+│  Stage 1: 个性化基线估计 (CPEB)                     │
+│  - 估计用户情绪基线 θ_user ~ N(μ, Σ)                │
+│  - 因果干预: E* = E(do(H = baseline))               │
+│  输出: 去偏后的情绪表示 e_debiased                   │
+└─────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│  Stage 2: 元学习快速适应 (MEA)                      │
+│  - 用k-shot样本微调: θ_user = θ + Δθ                │
+│  - 原型学习: 构建用户情绪原型                        │
+│  输出: 个性化编码器 Enc_user                         │
+└─────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│  Stage 3: 时序图建模 (THEGN)                        │
+│  - 构建异构对话图 G = (V, E)                         │
+│  - 多层图注意力聚合                                  │
+│  - 层级注意力: 节点→子图→全局                       │
+│  输出: 情绪风险得分 + 注意力权重(可解释性)           │
+└─────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│  Stage 4: 动态决策 (Adaptive Thresholding)          │
+│  - 结合用户基线调整阈值                              │
+│  - 多级预警: 绿(0-2)/蓝(3-4)/橙(5-9)/红(10)          │
+│  输出: 风险等级 + 干预建议                           │
+└─────────────────────────────────────────────────────┘
+```
+
+### 联合训练目标
+
+**多任务损失函数**:
+```
+L_total = L_emotion + λ₁·L_causal + λ₂·L_meta + λ₃·L_graph + λ₄·L_reg
+
+L_emotion: 情绪分类交叉熵
+L_causal: 因果效应一致性损失
+L_meta: 元学习适应损失  
+L_graph: 图结构正则化
+L_reg: L2正则化
+```
+
+**详细定义**:
+
+1. **情绪分类损失**:
+```
+L_emotion = -Σᵢ Σ_c y_ic · log(p_ic)
+```
+
+2. **因果一致性损失** (确保因果干预后的预测一致):
+```
+L_causal = ||E[y | do(H=h)] - ŷ_counterfactual||²
+```
+
+3. **元学习损失** (MAML二阶梯度):
+```
+L_meta = Σ_users L(θ - α·∇L(θ, D_support), D_query)
+```
+
+4. **图结构正则化** (平滑性约束):
+```
+L_graph = Σ_{(i,j)∈E} w_ij · ||h_i - h_j||²
+```
+
+---
+
+## 实验设计（顶刊标准）
+
+### 数据集（4个公开 + 1个自建）
+
+| 数据集 | 语言 | 规模 | 任务 | 用途 |
+|--------|------|------|------|------|
+| **NLPCC 2013/2014** | 中文 | 50k微博 | 情绪分类 | 主要评测 |
+| **DailyDialog** | 英文 | 13k对话 | 对话情绪 | 对话建模 |
+| **EmotionLines** | 英文 | 29k句子 | 多轮情绪 | 时序评测 |
+| **MELD** | 英文 | 13k句子 | 多模态情绪 | 鲁棒性测试 |
+| **StudentChat** (自建) | 中文 | 2k会话/100用户 | 学生对话 | 个性化评测 |
+
+**StudentChat数据集标注规范**:
+- 每个用户至少20轮对话
+- 标注：情绪标签(8类) + 风险等级(4级) + 个性化基线分数
+- 质量控制：双人标注，Kappa > 0.75
+
+### Baseline方法（10个）
+
+**传统方法**:
+1. LSTM + Attention (2016)
+2. BiLSTM-CRF (2017)
+
+**图神经网络**:
+3. DialogueGCN (EMNLP 2019)
+4. DialogueRNN (AAAI 2019)
+5. RGAT (EMNLP 2020)
+
+**预训练模型**:
+6. BERT-base (2019)
+7. RoBERTa-large (2020)
+8. COSMIC (EMNLP 2020)
+
+**最新方法** (必须对比):
+9. DAG-ERC (ACL 2022)
+10. SKAIG-ERC (AAAI 2023)
+11. **你的方法**: CPEB+MEA+THEGN (2024)
+
+### 评价指标
+
+**主要指标**:
+- Macro-F1（主要报告）
+- Weighted-F1
+- 每类情绪的Precision/Recall
+
+**个性化指标**:
+- Personalization Gain = F1_personalized - F1_generic
+- Few-shot Performance: 1-shot, 3-shot, 5-shot, 10-shot
+
+**因果分析指标**:
+- ATE (Average Treatment Effect): 平均因果效应
+- CATE (Conditional ATE): 条件因果效应
+- 反事实准确率: 干预后预测是否改变
+
+**效率指标**:
+- 推理时间（ms/sample）
+- 参数量（M）
+- 收敛速度（epochs）
+
+### 消融实验（Ablation Study）
+
+**必做实验**:
+1. Full Model (CPEB + MEA + THEGN)
+2. w/o CPEB (去除因果建模)
+3. w/o MEA (去除元学习，用标准fine-tuning)
+4. w/o THEGN (用LSTM替代图网络)
+5. w/o Personalization (通用模型)
+6. w/o Causal Intervention (只用基线估计)
+7. w/o Temporal Decay (图中无时间衰减)
+8. w/o Multi-head Attention (单头注意力)
+
+**预期结果**:
+- 每个模块都应带来 >2% 的F1提升
+- CPEB应在高混淆用户上提升 >5%
+- MEA应在少样本设定下提升 >10%
+- THEGN应在长对话上提升 >3%
+
+### 细粒度分析
+
+**1. 少样本性能曲线**:
+```
+x轴: k-shot (1, 3, 5, 10, 20, 50, 100)
+y轴: Macro-F1
+画出: MEA vs Fine-tuning vs Zero-shot的曲线
+预期: MEA在k<10时明显更好
+```
+
+**2. 个性化增益分析**:
+```
+将用户按"表达习惯方差"分组:
+- 低方差用户: 表达稳定，个性化增益小
+- 高方差用户: 表达多变，个性化增益大
+证明: CPEB在高方差组提升更显著
+```
+
+**3. 因果效应可视化**:
+```
+选择案例:
+原始预测: "好烦啊" → 高风险
+因果干预: 考虑该用户常说"好烦" → 中风险
+展示: ATE的置信区间和p值
+```
+
+**4. 注意力权重分析**:
+```
+可视化:
+- 时序注意力: 哪些历史对话最重要？
+- 词级注意力: 哪些词触发预警？
+- 图结构: 情绪如何在对话图中传播？
+```
+
+### Case Study（至少3个）
+
+**Case 1: 个性化基线的作用**
+```
+用户A (乐观型):
+  历史: 经常说"开心"、"不错"
+  当前: "今天有点累" 
+  通用模型: 中风险 (错误)
+  CPEB: 低风险 (正确，因为相对基线下降不大)
+
+用户B (悲观型):
+  历史: 经常说"累"、"烦"
+  当前: "还不错吧"
+  通用模型: 低风险 (错误)
+  CPEB: 中风险 (正确，相对基线有明显上升)
+```
+
+**Case 2: 元学习快速适应**
+```
+新用户C:
+  前3句: "嗯", "好的", "有点困"
+  MEA适应: 学到该用户表达简短
+  第4句: "不太好"
+  预测: 高风险 (正确，因为已适应其风格)
+```
+
+**Case 3: 时序图建模长距离依赖**
+```
+对话序列:
+  t=1: "考试成绩出来了" (中性)
+  t=2: "还行吧" (轻微消极)
+  t=5: "不想说了" (消极)
+  t=8: "算了" (放弃)
+
+LSTM: 只看到"算了"，预测中风险
+THEGN: 通过图连接看到情绪持续恶化，预测高风险 (正确)
+```
+
+---
+
+## 数学理论推导（单独文档）
+
+### 1. CPEB的可识别性证明
+
+**定理1** (Identifiability of Causal Baseline):
+在假设A1-A3下，真实情绪E可从观测数据中唯一识别。
+
+**证明**:
+(详细推导见 `theory/cpeb_proof.pdf`)
+
+### 2. MEA的泛化误差界
+
+**定理2** (Generalization Bound):
+对于元学习器，在k-shot设定下...
+(详细推导见 `theory/meta_learning_bound.pdf`)
+
+### 3. THEGN的表达能力
+
+**定理3** (Expressiveness):
+THEGN可以表达任何LSTM/GRU可表达的函数...
+(详细推导见 `theory/graph_expressiveness.pdf`)
+
+---
+
+## 项目结构
+
+```
+emotion-causal-meta/
+├── README.md
+├── requirements.txt
+├── setup.py
+│
+├── data/                          # 数据
+│   ├── raw/                       # 原始数据
+│   │   ├── nlpcc/
+│   │   ├── dailydialog/
+│   │   ├── emotionlines/
+│   │   └── studentchat/
+│   ├── processed/                 # 预处理后
+│   └── meta_splits/               # 元学习划分
+│
+├── src/                           # 源代码
+│   ├── models/                    # 核心模型
+│   │   ├── cpeb.py               # 因果基线模块
+│   │   ├── meta_learner.py       # 元学习器
+│   │   ├── thegn.py              # 图网络
+│   │   └── unified_model.py      # 整合模型
+│   │
+│   ├── data/                      # 数据处理
+│   │   ├── preprocessor.py
+│   │   ├── graph_builder.py
+│   │   └── meta_dataset.py
+│   │
+│   ├── training/                  # 训练
+│   │   ├── meta_trainer.py
+│   │   ├── losses.py
+│   │   └── optimizers.py
+│   │
+│   ├── evaluation/                # 评估
+│   │   ├── metrics.py
+│   │   ├── causal_analysis.py
+│   │   └── visualization.py
+│   │
+│   └── utils/                     # 工具
+│       ├── logger.py
+│       └── config.py
+│
+├── experiments/                   # 实验脚本
+│   ├── baseline/                  # Baseline实验
+│   ├── ablation/                  # 消融实验
+│   ├── few_shot/                  # 少样本实验
+│   └── case_study/                # 案例分析
+│
+├── notebooks/                     # Jupyter notebooks
+│   ├── 01_data_exploration.ipynb
+│   ├── 02_causal_analysis.ipynb
+│   ├── 03_attention_viz.ipynb
+│   └── 04_case_study.ipynb
+│
+├── theory/                        # 数学推导
+│   ├── cpeb_proof.pdf
+│   ├── meta_learning_bound.pdf
+│   └── graph_expressiveness.pdf
+│
+├── results/                       # 实验结果
+│   ├── tables/                    # LaTeX表格
+│   ├── figures/                   # 论文图片
+│   └── logs/                      # 训练日志
+│
+├── paper/                         # 论文草稿
+│   ├── main.tex
+│   ├── sections/
+│   └── references.bib
+│
+└── tests/                         # 单元测试
+    ├── test_cpeb.py
+    ├── test_meta_learner.py
+    └── test_thegn.py
+```
+
+---
